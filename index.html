@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head><meta charset="utf-8"><title>Lieder Corpus Templater</title></head>
+	<body><div id='div'>Paste a spreadsheet row below: <button onclick='parse_paste()'>Next</button><br/><input id='paste' size='50'/></div></body>
+<script>
+let imslp_id;
+let composer;
+let lyricist;
+let set;
+let number;
+let title;
+let page_offset = 1;
+let page;
+let system;
+let systems_max;
+let total_pages = 1;
+let total_systems;
+let measure;
+let measure_linear;
+let duration;
+let piece_array;
+let piece_row;
+let piece;
+let result;
+let total;
+
+// Remove an element: document.getElementById("element").remove();
+Element.prototype.remove = function() {
+	this.parentElement.removeChild(this);
+}
+
+function download_text_file(filename, text) {
+	let element = document.createElement('a');
+	element.setAttribute("href", "data:text/plain;charset=utf-8," + encodeURIComponent(text));
+	element.setAttribute("download", filename);
+	element.style.display = "none";
+	document.body.appendChild(element);
+	element.click();
+	document.body.removeChild(element);
+}
+
+function parse_paste() {
+	let arr = document.getElementById('paste').value.split('\t');
+	imslp_id = arr[1];
+	composer = arr[2];
+	lyricist = arr[3];
+	set = arr[4];
+	number = arr[5];
+	title = arr[6];
+	count_pages();
+}
+
+function count_pages() {
+	document.getElementById('div').remove();
+	document.body.innerHTML += `<div id="div"><br/>Page 1 of the template is Page <input id="page_offset" type="number" size="3" onfocus="select();" value="1"></input> of the PDF score.<br/>The last page is Page <input id="last_page" type="number" size="2"></input>&nbsp;<button type="button" id="nxt">Next</button>&nbsp;<button type="button" onclick="start_over();">Start over</button></div>`;
+	document.getElementById('last_page').value = total_pages + page_offset - 1;
+	document.getElementById('page_offset').select();
+	document.getElementById('nxt').onclick = function() {
+		total_pages = parseInt(document.getElementById('last_page').value, 10) - page_offset + 1;
+		count_systems();
+	};
+}
+
+function count_systems() {
+	document.getElementById('div').remove();
+	let div = document.createElement('div');
+	div.id = 'div';
+	div.innerHTML = '<b>Scroll through the score, and count the # of systems on each page:</b><br/>(The cursor hops automatically. You can also paste a string of numbers, e.g., 34444544.)<br/>';
+	document.body.appendChild(div);
+	let table = document.createElement('table');
+	div.appendChild(table);
+	total = total_pages;
+	let row1 = table.insertRow();
+	let row2 = table.insertRow();
+	let i;
+	let input_array = [];
+	row1.insertCell().appendChild(document.createTextNode('Page'));
+	row2.insertCell().appendChild(document.createTextNode('Systems'));
+	for (i = 0; i < total; i++) {
+		row1.insertCell().appendChild(document.createTextNode(`${i + page_offset}`));
+		input_array.push(document.createElement('input'));
+		input_array[i].size = '1';
+		// The user may've been sent back here to correct an error. In that case, fill in the previous data
+		input_array[i].value = page == undefined ? '4' : page[i];
+		input_array[i].parent = input_array; // Backdoor for update_array
+		input_array[i].num = i; // Backdoor for update_array
+		row2.insertCell().appendChild(input_array[i]);
+		input_array[i].addEventListener('focus', function(){this.select();});
+		input_array[i].addEventListener('input', update_array);
+	}
+	input_array[0].select();
+	let next_btn = document.createElement('button');
+	systems_max = 0;
+	next_btn.innerHTML = 'Next';
+	next_btn.onclick = function() {
+		page = new Array(total_pages); // Default value = undefined
+		for (i = 0; i < total_pages; i++) {
+			page[i] = parseInt(input_array[i].value, 16);
+			if (systems_max < page[i]) {
+				systems_max = page[i];
+			}
+		}
+		count_measures();
+	};
+	div.appendChild(next_btn);
+	let finish_btn = document.createElement('button');
+	let start_over_btn = document.createElement('button');
+	start_over_btn.innerHTML = 'Start over';
+	start_over_btn.onclick = start_over;
+	div.appendChild(start_over_btn);
+}
+
+function count_measures() {
+	document.getElementById('div').remove();
+	let div = document.createElement('div');
+	div.id = 'div';
+	div.innerHTML = '<b>Scroll through the score, and count the # of measures in each system:</b><br/>Rows = pages; columns = systems. Denote 10 ... 15 by a ... f.<br/>(The cursor hops automatically. You can also paste a string of numbers, e.g., 455436672ab34.)<br/>';
+	document.body.appendChild(div);
+	let table = document.createElement('table');
+	div.appendChild(table);
+	let row = table.insertRow();
+	row.insertCell();
+	let i, j;
+	for (i = 0; i < systems_max; i++) {
+		row.insertCell().appendChild(document.createTextNode(`${i + 1}`));
+	}
+	let input_array = [];
+	total_systems = 0;
+	for (i = 0; i < total_pages; i++) {
+		row = table.insertRow();
+		row.insertCell().appendChild(document.createTextNode('Page ' + `${i + page_offset}`));
+		for (j = 0; j < page[i]; j++) {
+			input_array.push(document.createElement('input'));
+			input_array[total_systems].size = '1';
+			input_array[total_systems].value = system == undefined ? '1' : system[i][j]; // By default, each system has 1 measure
+			input_array[total_systems].parent = input_array; // Backdoor for update_array
+			input_array[total_systems].num = total_systems; // Backdoor for update_array
+			row.insertCell().appendChild(input_array[total_systems]);
+			input_array[total_systems].addEventListener('focus', function(){this.select();});
+			input_array[total_systems].addEventListener('input', update_array);
+			total_systems++;
+		}
+	}
+	total = total_systems;
+	input_array[0].select();
+	let next_btn = document.createElement('button');
+	next_btn.innerHTML = 'Next';
+	next_btn.onclick = function(e, fin = false) {
+		let k = 0;
+		system = new Array(total_pages);
+		for (i = 0; i < total_pages; i++) {
+			system[i] = new Array(page[i]);
+			for (j = 0; j < page[i]; j++) {
+				system[i][j] = parseInt(input_array[k].value, 16);
+				k++;
+			}
+		}
+			// Initialize measure[][][]. Can't do .fill({}) as they all point to a single {}	
+		measure = new Array(total_pages);
+		for (i = 0; i < total_pages; i++) {
+			measure[i] = new Array(page[i]);
+		}
+		for (i = 0; i < total_pages; i++) {
+			for (j = 0; j < page[i]; j++) {
+				measure[i][j] = new Array(system[i][j]);
+			}
+		}
+		measure_linear = [];
+		for (i = 0; i < total_pages; i++) {
+			for (j = 0; j < page[i]; j++) {
+				for (k = 0; k < system[i][j]; k++) {
+					measure[i][j][k] = {coord : [i, j, k]};
+					measure_linear.push(measure[i][j][k]);
+					measure[i][j][k].pos = measure_linear.length - 1;
+				}
+			}
+		}
+		fin ? finish() : add_time_signatures();
+	};
+	div.appendChild(next_btn);
+	let finish_btn = document.createElement('button');
+	finish_btn.innerHTML = 'Finish here';
+	finish_btn.onclick = () => next_btn.onclick(undefined, true);	
+	div.appendChild(finish_btn);
+	let start_over_btn = document.createElement('button');
+	start_over_btn.innerHTML = 'Start over';
+	start_over_btn.onclick = start_over;
+	div.appendChild(start_over_btn);
+}
+
+function add_time_signatures() {
+	document.getElementById('div').remove();
+	let div = document.createElement('div');
+	div.id = 'div';
+	div.innerHTML = '<b>Scroll through the score, and record all time signatures. Try not to miss any.</b><br/>(If you missed some and need to add them later in MuseScore, press Ctrl before dragging the time signatures, so as to not ruin the layout. Do this for every voice.)<br/>(You can use the Tab key.)</br>For common time, enter 4/4 appease the wizard, and change it later in MuseScore.</br>More lines will appear as you type. It’s okay to leave lines empty.</br>Use negative numbers to count from the right/bottom, e.g., -2 (2nd last page/measure/system).</br>';
+	document.body.appendChild(div);
+	let table = document.createElement('table');
+	let num = 1;
+	let row = table.insertRow();
+	row.insertCell().appendChild(document.createTextNode('Page'));
+	row.insertCell().appendChild(document.createTextNode('System'));
+	row.insertCell().appendChild(document.createTextNode('Measure'));
+	row.insertCell().appendChild(document.createTextNode('Time signature'));
+	div.appendChild(table);
+
+	function add_line(line_num) {
+		let i;
+		row = table.insertRow();
+		i = document.createElement('input');
+		i.id = 'page' + line_num;
+		i.num = line_num;
+		i.pref = 'page';
+		i.auto = line_num == 0 ? false : true;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i.addEventListener('input', function(){this.style.color = 'black';});
+		i = document.createElement('input');
+		i.id = 'system' + line_num;
+		i.num = line_num;
+		i.pref = 'system';
+		i.auto = line_num == 0 ? false : true;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i.addEventListener('input', function(){this.style.color = 'black';});
+		i = document.createElement('input');
+		i.id = 'measure' + line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i.addEventListener('input', function(){this.style.color = 'black';});
+		i = document.createElement('input');
+		i.id = 'top' + line_num;
+		i.size = 1;
+		let cell = row.insertCell();
+		cell.appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i = document.createElement('input');
+		i.size = 1;
+		i.id = 'bottom' + line_num;
+		cell.appendChild(i);
+		i.addEventListener('focus', on_focus);
+
+		function on_focus() { // If no more lines below focus, add a line
+			if (line_num + 1 == num) {
+				add_line(num);
+				num++;
+			}
+			if (this.auto && this.value == '' && (this.pref == 'page' || this.pref == 'system' && document.getElementById(`page${this.num}`).value == document.getElementById(`page${this.num - 1}`).value)) {
+				this.value = document.getElementById(this.pref + (this.num - 1)).value;
+			}
+			this.select();
+		}
+	}
+
+	add_line(0);
+	document.getElementById('page0').value = page_offset;
+	document.getElementById('system0').value = '1';
+	document.getElementById('measure0').value = '1';
+	document.getElementById('top0').value = '3';
+	document.getElementById('bottom0').value = '4';
+	document.getElementById('top0').select();
+
+	let next_btn = document.createElement('button');
+	next_btn.innerHTML = 'Next';
+	next_btn.onclick = function(e, fin = false) {
+		for (i = 0; i < num; i++) {
+			let pg = minus_to_plus(parseInt(document.getElementById('page'+i).value, 10), total_pages + page_offset, page_offset);
+			if (isNaN(pg)) { // Ignore empty lines
+				continue;
+			}
+			if (pg < 0 || pg >= total_pages) {
+				document.getElementById('page'+i).style.color = 'red';
+				inconsistency('page', 'Page');
+				return;
+			}
+			let sys = minus_to_plus(parseInt(document.getElementById('system'+i).value, 10), page[pg] + 1);
+			if (sys < 0 || sys >= page[pg]) {
+				document.getElementById('system'+i).style.color = 'red';
+				inconsistency('system', 'System');
+				return;
+			}
+			let bar = minus_to_plus(parseInt(document.getElementById('measure'+i).value, 10), system[pg][sys] + 1);
+			if (bar < 0 || bar >= system[pg][sys]) {
+				document.getElementById('measure'+i).style.color = 'red';
+				inconsistency('measure', 'Measure');
+				return;
+			}
+			measure[pg][sys][bar].time = [parseInt(document.getElementById('top'+i).value, 10), parseInt(document.getElementById('bottom'+i).value, 10)];
+		}
+		// Fill in duration[][][]
+		duration = new Array(total_pages);
+		for (i = 0; i < total_pages; i++) {
+			duration[i] = new Array(page[i]);
+		}
+		for (i = 0; i < total_pages; i++) {
+			for (j = 0; j < page[i]; j++) {
+				duration[i][j] = new Array(system[i][j]);
+			}
+		}
+		for (i = 0; i < total_pages; i++) {
+			for (j = 0; j < page[i]; j++) {
+				for (k = 0; k < system[i][j]; k++) {
+					if (measure[i][j][k].time == undefined) {
+						var t = measure_linear[measure[i][j][k].pos - 1].coord;
+						duration[i][j][k] = duration[t[0]][t[1]][t[2]];
+					} else {
+						duration[i][j][k] = measure[i][j][k].time;
+					}
+				}
+			}
+		}
+		fin ? finish() : add_barlines();
+	};
+	div.appendChild(next_btn);
+	let finish_btn = document.createElement('button');
+	finish_btn.innerHTML = 'Finish here';
+	finish_btn.onclick = () => next_btn.onclick(undefined, true);
+	div.appendChild(finish_btn);
+	let start_over_btn = document.createElement('button');
+	start_over_btn.innerHTML = 'Start over';
+	start_over_btn.onclick = start_over;
+	div.appendChild(start_over_btn);
+}
+
+function add_barlines() {
+	document.getElementById('div').remove();
+	let div = document.createElement('div');
+	div.id = 'div';
+	div.innerHTML = '<b>For each type of barlines, scroll through the score and record their positions.</b><br/>(You can use the Tab key.)</br>More lines will appear as you type. It\'s okay to leave lines empty.</br>Use negative numbers to count from the right/bottom, e.g., -2 (2nd last page/measure/system).</br>If you need Da Capo etc., please add those later in MuseScore.';
+	document.body.appendChild(div);
+	let tbl = document.createElement('table');
+	let master = tbl.insertRow();
+	let table_double = document.createElement('table');
+	table_double.id = 'double';
+	table_double.num = 1;
+	let table_repeat_left = document.createElement('table');
+	table_repeat_left.id = 'repeat_left';
+	table_repeat_left.num = 1;
+	let table_repeat_right = document.createElement('table');
+	table_repeat_right.id = 'repeat_right';
+	table_repeat_right.num = 1;
+	let table_end = document.createElement('table');
+	table_end.id = 'end';
+	table_end.num = 1;
+	let cell, row;
+	cell = master.insertCell();
+	cell.innerHTML = '<b>Double</b><br/>';
+	cell.appendChild(table_double);
+	cell = master.insertCell();
+	cell.innerHTML = '<b>Left Repeat</b><br/>';
+	cell.appendChild(table_repeat_left);
+	cell = master.insertCell();
+	cell.innerHTML = '<b>Right Repeat</b><br/>';
+	cell.appendChild(table_repeat_right);
+	cell = master.insertCell();
+	cell.innerHTML = '<b>End</b><br/>';
+	cell.appendChild(table_end);
+	row = table_double.insertRow();
+	row.insertCell().appendChild(document.createTextNode('Page'));
+	row.insertCell().appendChild(document.createTextNode('System'));
+	row.insertCell().appendChild(document.createTextNode('Measure'));
+	row = table_repeat_left.insertRow();
+	row.insertCell().appendChild(document.createTextNode('Page'));
+	row.insertCell().appendChild(document.createTextNode('System'));
+	row.insertCell().appendChild(document.createTextNode('Measure'));
+	row = table_repeat_right.insertRow();
+	row.insertCell().appendChild(document.createTextNode('Page'));
+	row.insertCell().appendChild(document.createTextNode('System'));
+	row.insertCell().appendChild(document.createTextNode('Measure'));
+	row = table_end.insertRow();
+	row.insertCell().appendChild(document.createTextNode('Page'));
+	row.insertCell().appendChild(document.createTextNode('System'));
+	row.insertCell().appendChild(document.createTextNode('Measure'));
+	div.appendChild(tbl);
+
+	function add_line(line_num, table) {
+		let i;
+		row = table.insertRow();
+		i = document.createElement('input');
+		i.id = `${table.id}_page` + line_num;
+		i.pref = `${table.id}_page`;
+		i.auto = line_num == 0 ? false : true;
+		i.num = line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i.addEventListener('input', function(){this.style.color = 'black';});
+		i = document.createElement('input');
+		i.id = `${table.id}_system` + line_num;
+		i.pref = `${table.id}_system`;
+		i.auto = line_num == 0 ? false : true;
+		i.num = line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i.addEventListener('input', function(){this.style.color = 'black';});
+		i = document.createElement('input');
+		i.id = `${table.id}_measure` + line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i.addEventListener('input', function(){this.style.color = 'black';});
+
+		function on_focus() {
+			t = this.parentElement.parentElement.parentElement.parentElement;
+			if (line_num + 1 == t.num) {
+				add_line(t.num, t);
+				t.num++;
+			}
+			if (this.auto && this.value == '' && (this.pref == `${table.id}_page` || this.pref == `${table.id}_system` && document.getElementById(`${table.id}_page${this.num}`).value == document.getElementById(`${table.id}_page${this.num - 1}`).value)) {
+				this.value = document.getElementById(this.pref + (this.num - 1)).value;
+			}
+			this.select();
+		}
+	}
+
+	add_line(0, table_double);
+	add_line(0, table_repeat_left);
+	add_line(0, table_repeat_right);
+	add_line(0, table_end);
+	document.getElementById('double_page0').focus();
+	let next_btn = document.createElement('button');
+	next_btn.innerHTML = 'Next';
+	next_btn.onclick = function(e, fin = false) {
+		for (i = 0; i < document.getElementById('double').num; i++) {
+			let pg = minus_to_plus(parseInt(document.getElementById('double_page'+i).value, 10), total_pages + page_offset, page_offset);
+			if (isNaN(pg)) {
+				continue;
+			}
+			if (pg < 0 || pg >= total_pages) {
+				document.getElementById('double_page'+i).style.color = 'red';
+				inconsistency('page', 'Page');
+				return;
+			}
+			let sys = minus_to_plus(parseInt(document.getElementById('double_system'+i).value, 10), page[pg] + 1);
+			if (sys < 0 || sys >= page[pg]) {
+				document.getElementById('double_system'+i).style.color = 'red';
+				inconsistency('system', 'System');
+				return;
+			}
+			let bar = minus_to_plus(parseInt(document.getElementById('double_measure'+i).value, 10), system[pg][sys] + 1);
+			if (bar < 0 || bar >= system[pg][sys]) {
+				document.getElementById('double_measure'+i).style.color = 'red';
+				inconsistency('measure', 'Measure');
+				return;
+			}
+			measure[pg][sys][bar].barline = 'double';
+		}
+		for (i = 0; i < document.getElementById('repeat_left').num; i++) {
+			let pg = minus_to_plus(parseInt(document.getElementById('repeat_left_page'+i).value, 10), total_pages + page_offset, page_offset);
+			if (isNaN(pg)) {
+				continue;
+			}
+			if (pg < 0 || pg >= total_pages) {
+				document.getElementById('repeat_left_page'+i).style.color = 'red';
+				inconsistency('page', 'Page');
+				return;
+			}
+			let sys = minus_to_plus(parseInt(document.getElementById('repeat_left_system'+i).value, 10), page[pg] + 1);
+			if (sys < 0 || sys >= page[pg]) {
+				document.getElementById('repeat_left_system'+i).style.color = 'red';
+				inconsistency('system', 'System');
+				return;
+			}
+			let bar = minus_to_plus(parseInt(document.getElementById('repeat_left_measure'+i).value, 10), system[pg][sys] + 1);
+			if (bar < 0 || bar >= system[pg][sys]) {
+				document.getElementById('repeat_lefte_measure'+i).style.color = 'red';
+				inconsistency('measure', 'Measure');
+				return;
+			}
+			measure[pg][sys][bar].barline = 'repeat_left';
+		}
+		for (i = 0; i < document.getElementById('repeat_right').num; i++) {
+			let pg = minus_to_plus(parseInt(document.getElementById('repeat_right_page'+i).value, 10), total_pages + page_offset, page_offset);
+			if (isNaN(pg)) {
+				continue;
+			}
+			if (pg < 0 || pg >= total_pages) {
+				document.getElementById('repeat_right_page'+i).style.color = 'red';
+				inconsistency('page', 'Page');
+				return;
+			}
+			let sys = minus_to_plus(parseInt(document.getElementById('repeat_right_system'+i).value, 10), page[pg] + 1);
+			if (sys < 0 || sys >= page[pg]) {
+				document.getElementById('repeat_right_system'+i).style.color = 'red';
+				inconsistency('system', 'System');
+				return;
+			}
+			let bar = minus_to_plus(parseInt(document.getElementById('repeat_right_measure'+i).value, 10), system[pg][sys] + 1);
+			if (bar < 0 || bar >= system[pg][sys]) {
+				document.getElementById('repeat_right_measure'+i).style.color = 'red';
+				inconsistency('measure', 'Measure');
+				return;
+			}
+			measure[pg][sys][bar].barline = 'repeat_right';
+		}
+		for (i = 0; i < document.getElementById('end').num; i++) {
+			let pg = minus_to_plus(parseInt(document.getElementById('end_page'+i).value, 10), total_pages + page_offset, page_offset);
+			if (isNaN(pg)) {
+				continue;
+			}
+			if (pg < 0 || pg >= total_pages) {
+				document.getElementById('end_page'+i).style.color = 'red';
+				inconsistency('page', 'Page');
+				return;
+			}
+			let sys = minus_to_plus(parseInt(document.getElementById('end_system'+i).value, 10), page[pg] + 1);
+			if (sys < 0 || sys >= page[pg]) {
+				document.getElementById('end_system'+i).style.color = 'red';
+				inconsistency('system', 'System');
+				return;
+			}
+			let bar = minus_to_plus(parseInt(document.getElementById('end_measure'+i).value, 10), system[pg][sys] + 1);
+			if (bar < 0 || bar >= system[pg][sys]) {
+				document.getElementById('end_measure'+i).style.color = 'red';
+				inconsistency('measure', 'Measure');
+				return;
+			}
+			measure[pg][sys][bar].barline = 'end';
+		}
+		fin ? finish() : add_key_signatures();
+	};
+	div.appendChild(next_btn);
+	let finish_btn = document.createElement('button');
+	finish_btn.innerHTML = 'Finish here';
+	finish_btn.onclick = () => next_btn.onclick(undefined, true);
+	div.appendChild(finish_btn);
+	let start_over_btn = document.createElement('button');
+	start_over_btn.innerHTML = 'Start over';
+	start_over_btn.onclick = start_over;
+	div.appendChild(start_over_btn);
+}
+
+function add_key_signatures() {
+	document.getElementById('div').remove();
+	let div = document.createElement('div');
+	div.id = 'div';
+	div.innerHTML = '<b>Scroll through the score, and record all the key signatures.</b><br/>(You can use the Tab key.)</br>More lines will appear as you type. It\'s okay to leave lines empty.</br>Use negative numbers to count from the right/bottom, e.g., -2 (2nd last page/measure/system).</br>Use positive/negative numbers to denote the # of sharps/flats.</br>';
+	document.body.appendChild(div);
+	let table = document.createElement('table');
+	let num = 1;
+	let row = table.insertRow();
+	row.insertCell().appendChild(document.createTextNode('Page'));
+	row.insertCell().appendChild(document.createTextNode('System'));
+	row.insertCell().appendChild(document.createTextNode('Measure'));
+	row.insertCell().appendChild(document.createTextNode('Key'));
+	div.appendChild(table);
+
+	function add_line(line_num) {
+		let i;
+		row = table.insertRow();
+		i = document.createElement('input');
+		i.id = 'page' + line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		function on_focus() {
+			if (line_num + 1 == num) {
+				add_line(num);
+				num++;
+			}
+			if (!this.auto || this.value != '') {
+				return;
+			}
+			if (this.auto && this.value == '' && (this.pref == 'page' || this.pref == 'system' && document.getElementById(`page${this.num}`).value == document.getElementById(`page${this.num - 1}`).value)) {
+				this.value = document.getElementById(this.pref + (this.num - 1)).value;
+			}
+			this.select();
+		}
+		i.addEventListener('focus', on_focus);
+		i = document.createElement('input');
+		i.id = 'system' + line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i = document.createElement('input');
+		i.id = 'measure' + line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', on_focus);
+		i = document.createElement('input');
+		i.id = 'key' + line_num;
+		i.size = 2;
+		row.insertCell().appendChild(i);
+		i.addEventListener('focus', function() {
+			if (line_num + 1 == num) {
+				add_line(num);
+				num++;
+			}
+			this.select();
+		});
+	}
+
+	add_line(0);
+	document.getElementById('page0').value = page_offset;
+	document.getElementById('system0').value = '1';
+	document.getElementById('measure0').value = '1';
+	document.getElementById('key0').value = '0';
+	document.getElementById('key0').select();
+	let finish_btn = document.createElement('button');
+	finish_btn.innerHTML = 'Finish';
+	finish_btn.onclick = function() {
+		for (i = 0; i < num; i++) {
+			let pg = minus_to_plus(parseInt(document.getElementById('page'+i).value, 10), total_pages + page_offset, page_offset);
+			if (isNaN(pg)) {
+				continue;
+			}
+			if (pg < 0 || pg >= total_pages) {
+				document.getElementById('double_page'+i).style.color = 'red';
+				inconsistency('page', 'Page');
+				return;
+			}
+			let sys = minus_to_plus(parseInt(document.getElementById('system'+i).value, 10), page[pg] + 1);
+			if (sys < 0 || sys >= page[pg]) {
+				document.getElementById('double_system'+i).style.color = 'red';
+				inconsistency('system', 'System');
+				return;
+			}
+			let bar = minus_to_plus(parseInt(document.getElementById('measure'+i).value, 10), system[pg][sys] + 1);
+			if (bar < 0 || bar >= system[pg][sys]) {
+				document.getElementById('double_measure'+i).style.color = 'red';
+				inconsistency('measure', 'Measure');
+				return;
+			}
+			measure[pg][sys][bar].key = document.getElementById('key'+i).value;
+		}
+		finish();
+	};
+	div.appendChild(finish_btn);
+	let start_over_btn = document.createElement('button');
+	start_over_btn.innerHTML = 'Start over';
+	start_over_btn.onclick = start_over;
+	div.appendChild(start_over_btn);
+}
+
+function minus_to_plus(x, tot, offset=1) {
+	return x > 0 ? x - offset : tot + x - offset;
+}
+
+function update_array() { // this.parent = input_array
+	if (this.value=='') { // Don't leave it empty
+		this.value = '1';
+		this.select();
+		return;
+	}
+	this.value = this.value.substring(0, total - this.num); // Don't go out of bound
+	let pos = this.num + this.value.length;
+	let i;
+	let j = pos - 1;
+	for (i = this.value.length; i > 0; i--) {
+		this.parent[j].value = this.value.charAt(i - 1);
+		j--;
+	}
+	pos < total ? this.parent[pos].select() : this.parent[total - 1].select();
+}
+
+function finish() {
+	// Fill up incomplete arrays with defaults
+	let i, j, k;
+	if (total_pages == undefined) {
+		total_pages = 1;
+		page = new Array(total_pages);
+	}
+	if (page[0] == undefined) {
+		page.fill(4);
+		system = new Array(total_pages);
+		for (i = 0; i < total_pages; i++) {
+			system[i] = new Array(4).fill(1);		
+		}
+	}
+	if (measure == undefined) {
+		measure = new Array(total_pages);
+		for (i = 0; i < total_pages; i++) {
+			measure[i] = new Array(page[i]);
+			for (j = 0; j < page[i]; j++) {
+				measure[i][j] = new Array(system[i][j]);
+				for (k = 0; k < system[i][j]; k++) {
+					measure[i][j][k] = {coord : [i, j, k]};
+				}
+			}
+		measure[0][0][0].time = [3, 4];
+		}
+	}
+	if (duration == undefined) {
+		duration = new Array(total_pages);
+		for (i = 0; i < total_pages; i++) {
+			duration[i] = new Array(page[i]);
+			for (j = 0; j < page[i]; j++) {
+				duration[i][j] = new Array(system[i][j]);
+				for (k = 0; k < system[i][j]; k++) {
+					duration[i][j][k] = [3, 4];
+				}
+			}
+		}
+	}
+	if (measure[0][0][0].key == undefined) {
+		measure[0][0][0].key = 0;
+	}
+	// head
+	result = `<?xml version="1.0" encoding="UTF-8"?>\n<files>\n<file name="score_style.mss">\n<![CDATA[<?xml version="1.0" encoding="UTF-8"?>\n<museScore version="4.50">\n<Style>\n<pageWidth>8.27</pageWidth>\n<pageHeight>11.69</pageHeight>\n<pagePrintableWidth>7.4826</pagePrintableWidth>\n<pageEvenLeftMargin>0.393701</pageEvenLeftMargin>\n<pageOddLeftMargin>0.393701</pageOddLeftMargin>\n<pageEvenTopMargin>0.393701</pageEvenTopMargin>\n<pageEvenBottomMargin>0.787402</pageEvenBottomMargin>\n<pageOddTopMargin>0.393701</pageOddTopMargin>\n<pageOddBottomMargin>0.787402</pageOddBottomMargin>\n<pageTwosided>1</pageTwosided>\n<staffUpperBorder>20</staffUpperBorder>\n<staffLowerBorder>7</staffLowerBorder>\n<staffHeaderFooterPadding>1</staffHeaderFooterPadding>\n<staffDistance>6.5</staffDistance>\n<instrumentNameOffset>1</instrumentNameOffset>\n<akkoladeDistance>6.5</akkoladeDistance>\n<minSystemDistance>8.5</minSystemDistance>\n<maxSystemDistance>25</maxSystemDistance>\n<alignSystemToMargin>1</alignSystemToMargin>\n<enableVerticalSpread>1</enableVerticalSpread>\n<spreadSystem>2.5</spreadSystem>\n<spreadSquareBracket>1.2</spreadSquareBracket>\n<spreadCurlyBracket>1.1</spreadCurlyBracket>\n<minSystemSpread>8.5</minSystemSpread>\n<maxSystemSpread>30</maxSystemSpread>\n<minStaffSpread>3.5</minStaffSpread>\n<maxStaffSpread>20</maxStaffSpread>\n<maxAkkoladeDistance>8</maxAkkoladeDistance>\n<maxPageFillSpread>6</maxPageFillSpread>\n<lyricsPlacement>1</lyricsPlacement>\n<lyricsPosAbove x="0" y="-2"/>\n<lyricsPosBelow x="0" y="3"/>\n<lyricsMinTopDistance>1</lyricsMinTopDistance>\n<lyricsMinBottomDistance>2</lyricsMinBottomDistance>\n<lyricsMinDistance>0.25</lyricsMinDistance>\n<lyricsLineHeight>1</lyricsLineHeight>\n<lyricsDashMinLength>0.4</lyricsDashMinLength>\n<lyricsDashMaxLength>0.8</lyricsDashMaxLength>\n<lyricsDashMaxDistance>10</lyricsDashMaxDistance>\n<lyricsDashForce>1</lyricsDashForce>\n<lyricsDashFirstAndLastGapAreHalf>1</lyricsDashFirstAndLastGapAreHalf>\n<lyricsAlignVerseNumber>1</lyricsAlignVerseNumber>\n<lyricsLineThickness>0.1</lyricsLineThickness>\n<lyricsMelismaAlign>left,baseline</lyricsMelismaAlign>\n<lyricsMelismaPad>0.5</lyricsMelismaPad>\n<lyricsDashPad>0.05</lyricsDashPad>\n<lyricsDashLineThickness>0.15</lyricsDashLineThickness>\n<lyricsDashYposRatio>0.6</lyricsDashYposRatio>\n<lyricsShowDashIfSyllableOnFirstNote>1</lyricsShowDashIfSyllableOnFirstNote>\n<lyricsMelismaForce>0</lyricsMelismaForce>\n<lyricsMelismaMinLength>1</lyricsMelismaMinLength>\n<lyricsDashPosAtStartOfSystem>0</lyricsDashPosAtStartOfSystem>\n<lyricsAvoidBarlines>1</lyricsAvoidBarlines>\n<lyricsOddFontFace>Edwin</lyricsOddFontFace>\n<lyricsOddFontSize>10</lyricsOddFontSize>\n<lyricsOddLineSpacing>1</lyricsOddLineSpacing>\n<lyricsOddFontSpatiumDependent>1</lyricsOddFontSpatiumDependent>\n<lyricsOddFontStyle>0</lyricsOddFontStyle>\n<lyricsOddColor r="0" g="0" b="0" a="255"/>\n<lyricsOddAlign>center,baseline</lyricsOddAlign>\n<lyricsOddFrameType>0</lyricsOddFrameType>\n<lyricsOddFramePadding>0.2</lyricsOddFramePadding>\n<lyricsOddFrameWidth>0.1</lyricsOddFrameWidth>\n<lyricsOddFrameRound>0</lyricsOddFrameRound>\n<lyricsOddFrameFgColor r="0" g="0" b="0" a="255"/>\n<lyricsOddFrameBgColor r="255" g="255" b="255" a="0"/>\n<lyricsEvenFontFace>Edwin</lyricsEvenFontFace>\n<lyricsEvenFontSize>10</lyricsEvenFontSize>\n<lyricsEvenLineSpacing>1</lyricsEvenLineSpacing>\n<lyricsEvenFontSpatiumDependent>1</lyricsEvenFontSpatiumDependent>\n<lyricsEvenFontStyle>0</lyricsEvenFontStyle>\n<lyricsEvenColor r="0" g="0" b="0" a="255"/>\n<lyricsEvenAlign>center,baseline</lyricsEvenAlign>\n<lyricsEvenFrameType>0</lyricsEvenFrameType>\n<lyricsEvenFramePadding>0.2</lyricsEvenFramePadding>\n<lyricsEvenFrameWidth>0.1</lyricsEvenFrameWidth>\n<lyricsEvenFrameRound>0</lyricsEvenFrameRound>\n<lyricsEvenFrameFgColor r="0" g="0" b="0" a="255"/>\n<lyricsEvenFrameBgColor r="255" g="255" b="255" a="0"/>\n<figuredBassFontFamily>MScoreBC</figuredBassFontFamily>\n<figuredBassYOffset>6</figuredBassYOffset>\n<figuredBassLineHeight>1</figuredBassLineHeight>\n<figuredBassAlignment>0</figuredBassAlignment>\n<figuredBassStyle>0</figuredBassStyle>\n<systemFrameDistance>7</systemFrameDistance>\n<frameSystemDistance>7</frameSystemDistance>\n<minMeasureWidth>5</minMeasureWidth>\n<barWidth>0.18</barWidth>\n<doubleBarWidth>0.18</doubleBarWidth>\n<endBarWidth>0.55</endBarWidth>\n<doubleBarDistance>0.37</doubleBarDistance>\n<endBarDistance>0.335</endBarDistance>\n<repeatBarlineDotSeparation>0.402188</repeatBarlineDotSeparation>\n<repeatBarTips>0</repeatBarTips>\n<startBarlineSingle>0</startBarlineSingle>\n<startBarlineMultiple>1</startBarlineMultiple>\n<maskBarlinesForText>0</maskBarlinesForText>\n<bracketWidth>0.44</bracketWidth>\n<bracketDistance>0.45</bracketDistance>\n<akkoladeWidth>1.6</akkoladeWidth>\n<akkoladeBarDistance>0.4</akkoladeBarDistance>\n<dividerLeft>0</dividerLeft>\n<dividerLeftSym>systemDivider</dividerLeftSym>\n<dividerLeftX>0</dividerLeftX>\n<dividerLeftY>0</dividerLeftY>\n<dividerRight>0</dividerRight>\n<dividerRightSym>systemDivider</dividerRightSym>\n<dividerRightX>0</dividerRightX>\n<dividerRightY>0</dividerRightY>\n<clefLeftMargin>0.8</clefLeftMargin>\n<keysigLeftMargin>0.5</keysigLeftMargin>\n<ambitusMargin>0.5</ambitusMargin>\n<timesigLeftMargin>0.5</timesigLeftMargin>\n<midClefKeyRightMargin>1</midClefKeyRightMargin>\n<clefKeyRightMargin>0.8</clefKeyRightMargin>\n<clefKeyDistance>1</clefKeyDistance>\n<clefTimesigDistance>1</clefTimesigDistance>\n<keyTimesigDistance>1</keyTimesigDistance>\n<keyBarlineDistance>1</keyBarlineDistance>\n<systemHeaderDistance>2.5</systemHeaderDistance>\n<systemHeaderTimeSigDistance>2</systemHeaderTimeSigDistance>\n<systemTrailerRightMargin>0.5</systemTrailerRightMargin>\n<clefBarlineDistance>0.5</clefBarlineDistance>\n<timesigBarlineDistance>0.5</timesigBarlineDistance>\n<timeSigPlacement>normal</timeSigPlacement>\n<timeSigCenterOnBarline>1</timeSigCenterOnBarline>\n<timeSigVSMarginCentered>hangIntoMargin</timeSigVSMarginCentered>\n<timeSigVSMarginNonCentered>rightAlignToBarline</timeSigVSMarginNonCentered>\n<timeSigCenterAcrossStaveGroup>0</timeSigCenterAcrossStaveGroup>\n<timeSigNormalStyle>normal</timeSigNormalStyle>\n<timeSigNormalScale w="1" h="1"/>\n<timeSigNormalScaleLock>1</timeSigNormalScaleLock>\n<timeSigNormalNumDist>0</timeSigNormalNumDist>\n<timeSigNormalY>0</timeSigNormalY>\n<timeSigAboveStyle>normal</timeSigAboveStyle>\n<timeSigAboveScale w="2" h="2"/>\n<timeSigAboveScaleLock>1</timeSigAboveScaleLock>\n<timeSigAboveNumDist>0.1</timeSigAboveNumDist>\n<timeSigAboveY>-1</timeSigAboveY>\n<timeSigAcrossStyle>narrow</timeSigAcrossStyle>\n<timeSigAcrossScale w="4" h="4"/>\n<timeSigAcrossScaleLock>1</timeSigAcrossScaleLock>\n<timeSigAcrossNumDist>0.1</timeSigAcrossNumDist>\n<timeSigAcrossY>0</timeSigAcrossY>\n<useStraightNoteFlags>0</useStraightNoteFlags>\n<stemWidth>0.11</stemWidth>\n<shortenStem>1</shortenStem>\n<stemLength>3.5</stemLength>\n<stemLengthSmall>2.25</stemLengthSmall>\n<shortStemStartLocation>1</shortStemStartLocation>\n<shortestStem>2.25</shortestStem>\n<combineVoice>1</combineVoice>\n<beginRepeatLeftMargin>1</beginRepeatLeftMargin>\n<minNoteDistance>0.25</minNoteDistance>\n<barNoteDistance>1</barNoteDistance>\n<barAccidentalDistance>0.3</barAccidentalDistance>\n<noteBarDistance>1</noteBarDistance>\n<measureSpacing>1.5</measureSpacing>\n<measureRepeatNumberPos>-0.5</measureRepeatNumberPos>\n<mrNumberSeries>0</mrNumberSeries>\n<mrNumberEveryXMeasures>4</mrNumberEveryXMeasures>\n<mrNumberSeriesWithParentheses>1</mrNumberSeriesWithParentheses>\n<oneMeasureRepeatShow1>0</oneMeasureRepeatShow1>\n<fourMeasureRepeatShowExtenders>0</fourMeasureRepeatShowExtenders>\n<staffLineWidth>0.11</staffLineWidth>\n<ledgerLineWidth>0.16</ledgerLineWidth>\n<ledgerLineLength>0.35</ledgerLineLength>\n<stemSlashPosition>2</stemSlashPosition>\n<stemSlashAngle>40</stemSlashAngle>\n<stemSlashThickness>0.125</stemSlashThickness>\n<accidentalDistance>0.22</accidentalDistance>\n<accidentalNoteDistance>0.22</accidentalNoteDistance>\n<bracketedAccidentalPadding>0</bracketedAccidentalPadding>\n<alignAccidentalsLeft>0</alignAccidentalsLeft>\n<accidentalOrderFollowsNoteDisplacement>0</accidentalOrderFollowsNoteDisplacement>\n<alignAccidentalOctavesAcrossSubChords>0</alignAccidentalOctavesAcrossSubChords>\n<keepAccidentalSecondsTogether>0</keepAccidentalSecondsTogether>\n<alignOffsetOctaveAccidentals>0</alignOffsetOctaveAccidentals>\n<keysigAccidentalDistance>0.3</keysigAccidentalDistance>\n<keysigNaturalDistance>0.4</keysigNaturalDistance>\n<beamWidth>0.5</beamWidth>\n<useWideBeams>0</useWideBeams>\n<beamMinLen>1.32</beamMinLen>\n<beamNoSlope>0</beamNoSlope>\n<snapCustomBeamsToGrid>1</snapCustomBeamsToGrid>\n<frenchStyleBeams>0</frenchStyleBeams>\n<dotMag>1</dotMag>\n<dotNoteDistance>0.35</dotNoteDistance>\n<dotRestDistance>0.25</dotRestDistance>\n<dotDotDistance>0.5</dotDotDistance>\n<propertyDistanceHead>0.4</propertyDistanceHead>\n<propertyDistanceStem>0.4</propertyDistanceStem>\n<propertyDistance>0.4</propertyDistance>\n<articulationMag>1</articulationMag>\n<articulationPosAbove x="0" y="0"/>\n<articulationAnchorDefault>2</articulationAnchorDefault>\n<articulationAnchorLuteFingering>1</articulationAnchorLuteFingering>\n<articulationAnchorOther>0</articulationAnchorOther>\n<articulationStemHAlign>2</articulationStemHAlign>\n<articulationKeepTogether>1</articulationKeepTogether>\n<trillAlwaysShowCueNote>0</trillAlwaysShowCueNote>\n<lastSystemFillLimit>0.8</lastSystemFillLimit>\n<hairpinPlacement>1</hairpinPlacement>\n<hairpinPosAbove x="0" y="-2.5"/>\n<hairpinPosBelow x="0" y="3.5"/>\n<hairpinLinePosAbove x="0" y="-3"/>\n<hairpinLinePosBelow x="0" y="4"/>\n<hairpinHeight>1.3</hairpinHeight>\n<hairpinContHeight>0.5</hairpinContHeight>\n<hairpinLineWidth>0.12</hairpinLineWidth>\n<hairpinFontFace>Edwin</hairpinFontFace>\n<hairpinFontSize>10</hairpinFontSize>\n<hairpinLineSpacing>1</hairpinLineSpacing>\n<hairpinFontSpatiumDependent>1</hairpinFontSpatiumDependent>\n<hairpinFontStyle>2</hairpinFontStyle>\n<hairpinColor r="0" g="0" b="0" a="255"/>\n<hairpinTextAlign>left,baseline</hairpinTextAlign>\n<hairpinFrameType>0</hairpinFrameType>\n<hairpinFramePadding>0.2</hairpinFramePadding>\n<hairpinFrameWidth>0.1</hairpinFrameWidth>\n<hairpinFrameRound>0</hairpinFrameRound>\n<hairpinFrameFgColor r="0" g="0" b="0" a="255"/>\n<hairpinFrameBgColor r="255" g="255" b="255" a="0"/>\n<hairpinText></hairpinText>\n<hairpinCrescText>cresc.</hairpinCrescText>\n<hairpinDecrescText>dim.</hairpinDecrescText>\n<hairpinCrescContText>(cresc.)</hairpinCrescContText>\n<hairpinDecrescContText>(dim.)</hairpinDecrescContText>\n<hairpinLineStyle>solid</hairpinLineStyle>\n<hairpinDashLineLen>3</hairpinDashLineLen>\n<hairpinDashGapLen>3</hairpinDashGapLen>\n<hairpinLineLineStyle>dashed</hairpinLineLineStyle>\n<hairpinLineDashLineLen>5</hairpinLineDashLineLen>\n<hairpinLineDashGapLen>20</hairpinLineDashGapLen>\n<pedalPlacement>1</pedalPlacement>\n<pedalPosAbove x="0" y="-4"/>\n<pedalPosBelow x="0" y="4"/>\n<pedalLineWidth>0.11</pedalLineWidth>\n<pedalLineStyle>solid</pedalLineStyle>\n<pedalDashLineLen>4</pedalDashLineLen>\n<pedalDashGapLen>4</pedalDashGapLen>\n<pedalHookHeight>-1.2</pedalHookHeight>\n<pedalFontFace>Edwin</pedalFontFace>\n<pedalFontSize>12</pedalFontSize>\n<pedalLineSpacing>1</pedalLineSpacing>\n<pedalFontSpatiumDependent>1</pedalFontSpatiumDependent>\n<pedalMusicalSymbolsScale>1</pedalMusicalSymbolsScale>\n<pedalFontStyle>0</pedalFontStyle>\n<pedalColor r="0" g="0" b="0" a="255"/>\n<pedalTextAlign>left,baseline</pedalTextAlign>\n<pedalFrameType>0</pedalFrameType>\n<pedalFramePadding>0.2</pedalFramePadding>\n<pedalFrameWidth>0.1</pedalFrameWidth>\n<pedalFrameRound>0</pedalFrameRound>\n<pedalFrameFgColor r="0" g="0" b="0" a="255"/>\n<pedalFrameBgColor r="255" g="255" b="255" a="0"/>\n<pedalText>&lt;sym&gt;keyboardPedalPed&lt;/sym&gt;</pedalText>\n<pedalHookText></pedalHookText>\n<pedalContinueText>&lt;sym&gt;keyboardPedalParensLeft&lt;/sym&gt;&lt;sym&gt;keyboardPedalPed&lt;/sym&gt;&lt;sym&gt;keyboardPedalParensRight&lt;/sym&gt;</pedalContinueText>\n<pedalContinueHookText></pedalContinueHookText>\n<pedalEndText></pedalEndText>\n<pedalRosetteEndText>&lt;sym&gt;keyboardPedalUp&lt;/sym&gt;</pedalRosetteEndText>\n<trillPlacement>0</trillPlacement>\n<trillPosAbove x="0" y="-1"/>\n<trillPosBelow x="0" y="1"/>\n<vibratoPlacement>0</vibratoPlacement>\n<vibratoPosAbove x="0" y="-1"/>\n<vibratoPosBelow x="0" y="1"/>\n<harmonyFretDist>1</harmonyFretDist>\n<minHarmonyDistance>0.5</minHarmonyDistance>\n<maxHarmonyBarDistance>3</maxHarmonyBarDistance>\n<maxChordShiftAbove>0</maxChordShiftAbove>\n<maxChordShiftBelow>0</maxChordShiftBelow>\n<harmonyPlacement>0</harmonyPlacement>\n<romanNumeralPlacement>1</romanNumeralPlacement>\n<nashvilleNumberPlacement>0</nashvilleNumberPlacement>\n<harmonyVoiceLiteral>1</harmonyVoiceLiteral>\n<harmonyVoicing>0</harmonyVoicing>\n<harmonyDuration>0</harmonyDuration>\n<chordSymbolAPosAbove x="0" y="-2.5"/>\n<chordSymbolAPosBelow x="0" y="3.5"/>\n<chordSymbolBPosAbove x="0" y="-5"/>\n<chordSymbolBPosBelow x="0" y="3.5"/>\n<romanNumeralPosAbove x="0" y="-2.5"/>\n<romanNumeralPosBelow x="0" y="3.5"/>\n<nashvilleNumberPosAbove x="0" y="-2.5"/>\n<nashvilleNumberPosBelow x="0" y="3.5"/>\n<chordSymbolAFontFace>Edwin</chordSymbolAFontFace>\n<chordSymbolAFontSize>11</chordSymbolAFontSize>\n<chordSymbolALineSpacing>1</chordSymbolALineSpacing>\n<chordSymbolAFontSpatiumDependent>1</chordSymbolAFontSpatiumDependent>\n<chordSymbolAFontStyle>0</chordSymbolAFontStyle>\n<chordSymbolAColor r="0" g="0" b="0" a="255"/>\n<chordSymbolAAlign>left,baseline</chordSymbolAAlign>\n<chordSymbolAFrameType>0</chordSymbolAFrameType>\n<chordSymbolAFramePadding>0.2</chordSymbolAFramePadding>\n<chordSymbolAFrameWidth>0.1</chordSymbolAFrameWidth>\n<chordSymbolAFrameRound>0</chordSymbolAFrameRound>\n<chordSymbolAFrameFgColor r="0" g="0" b="0" a="255"/>\n<chordSymbolAFrameBgColor r="255" g="255" b="255" a="0"/>\n<chordSymbolBFontFace>Edwin</chordSymbolBFontFace>\n<chordSymbolBFontSize>11</chordSymbolBFontSize>\n<chordSymbolBLineSpacing>1</chordSymbolBLineSpacing>\n<chordSymbolBFontSpatiumDependent>1</chordSymbolBFontSpatiumDependent>\n<chordSymbolBFontStyle>2</chordSymbolBFontStyle>\n<chordSymbolBColor r="0" g="0" b="0" a="255"/>\n<chordSymbolBAlign>left,baseline</chordSymbolBAlign>\n<chordSymbolBFrameType>0</chordSymbolBFrameType>\n<chordSymbolBFramePadding>0.2</chordSymbolBFramePadding>\n<chordSymbolBFrameWidth>0.1</chordSymbolBFrameWidth>\n<chordSymbolBFrameRound>0</chordSymbolBFrameRound>\n<chordSymbolBFrameFgColor r="0" g="0" b="0" a="255"/>\n<chordSymbolBFrameBgColor r="255" g="255" b="255" a="0"/>\n<romanNumeralFontFace>Campania</romanNumeralFontFace>\n<romanNumeralFontSize>12</romanNumeralFontSize>\n<romanNumeralLineSpacing>1</romanNumeralLineSpacing>\n<romanNumeralFontSpatiumDependent>1</romanNumeralFontSpatiumDependent>\n<romanNumeralFontStyle>0</romanNumeralFontStyle>\n<romanNumeralColor r="0" g="0" b="0" a="255"/>\n<romanNumeralAlign>left,baseline</romanNumeralAlign>\n<romanNumeralFrameType>0</romanNumeralFrameType>\n<romanNumeralFramePadding>0.2</romanNumeralFramePadding>\n<romanNumeralFrameWidth>0.1</romanNumeralFrameWidth>\n<romanNumeralFrameRound>0</romanNumeralFrameRound>\n<romanNumeralFrameFgColor r="0" g="0" b="0" a="255"/>\n<romanNumeralFrameBgColor r="255" g="255" b="255" a="0"/>\n<nashvilleNumberFontFace>Edwin</nashvilleNumberFontFace>\n<nashvilleNumberFontSize>12</nashvilleNumberFontSize>\n<nashvilleNumberLineSpacing>1</nashvilleNumberLineSpacing>\n<nashvilleNumberFontSpatiumDependent>1</nashvilleNumberFontSpatiumDependent>\n<nashvilleNumberFontStyle>0</nashvilleNumberFontStyle>\n<nashvilleNumberColor r="0" g="0" b="0" a="255"/>\n<nashvilleNumberAlign>left,baseline</nashvilleNumberAlign>\n<nashvilleNumberFrameType>0</nashvilleNumberFrameType>\n<nashvilleNumberFramePadding>0.2</nashvilleNumberFramePadding>\n<nashvilleNumberFrameWidth>0.1</nashvilleNumberFrameWidth>\n<nashvilleNumberFrameRound>0</nashvilleNumberFrameRound>\n<nashvilleNumberFrameFgColor r="0" g="0" b="0" a="255"/>\n<nashvilleNumberFrameBgColor r="255" g="255" b="255" a="0"/>\n<capoPosition>0</capoPosition>\n<fretNumMag>2</fretNumMag>\n<fretNumPos>0</fretNumPos>\n<fretY>1</fretY>\n<fretMinDistance>0.5</fretMinDistance>\n<fretMag>1</fretMag>\n<fretPlacement>0</fretPlacement>\n<fretStrings>6</fretStrings>\n<fretFrets>5</fretFrets>\n<fretNut>1</fretNut>\n<fretDotSize>1</fretDotSize>\n<fretDotSpatiumSize>0.5</fretDotSpatiumSize>\n<fretStringSpacing>0.7</fretStringSpacing>\n<fretFretSpacing>0.8</fretFretSpacing>\n<fretOrientation>0</fretOrientation>\n<maxFretShiftAbove>0</maxFretShiftAbove>\n<maxFretShiftBelow>0</maxFretShiftBelow>\n<fretNutThickness>0.3</fretNutThickness>\n<fretUseCustomSuffix>0</fretUseCustomSuffix>\n<fretCustomSuffix>fr</fretCustomSuffix>\n<barreAppearanceSlur>0</barreAppearanceSlur>\n<barreLineWidth>1</barreLineWidth>\n<fretShowFingerings>0</fretShowFingerings>\n<fretStyleExtended>0</fretStyleExtended>\n<showPageNumber>1</showPageNumber>\n<showPageNumberOne>0</showPageNumberOne>\n<pageNumberOddEven>1</pageNumberOddEven>\n<showMeasureNumber>1</showMeasureNumber>\n<showMeasureNumberOne>0</showMeasureNumberOne>\n<measureNumberInterval>5</measureNumberInterval>\n<measureNumberSystem>1</measureNumberSystem>\n<measureNumberAllStaves>0</measureNumberAllStaves>\n<smallNoteMag>0.7</smallNoteMag>\n<scaleRythmicSpacingForSmallNotes>0</scaleRythmicSpacingForSmallNotes>\n<graceNoteMag>0.7</graceNoteMag>\n<graceToMainNoteDist>0.45</graceToMainNoteDist>\n<graceToGraceNoteDist>0.3</graceToGraceNoteDist>\n<smallStaffMag>0.7</smallStaffMag>\n<smallClefMag>0.8</smallClefMag>\n<genClef>1</genClef>\n<hideTabClefAfterFirst>1</hideTabClefAfterFirst>\n<genKeysig>1</genKeysig>\n<genCourtesyTimesig>1</genCourtesyTimesig>\n<genCourtesyKeysig>1</genCourtesyKeysig>\n<genCourtesyClef>1</genCourtesyClef>\n<keySigCourtesyBarlineMode>2</keySigCourtesyBarlineMode>\n<timeSigCourtesyBarlineMode>0</timeSigCourtesyBarlineMode>\n<swingRatio>60</swingRatio>\n<swingUnit></swingUnit>\n<useStandardNoteNames>1</useStandardNoteNames>\n<useGermanNoteNames>0</useGermanNoteNames>\n<useFullGermanNoteNames>0</useFullGermanNoteNames>\n<useSolfeggioNoteNames>0</useSolfeggioNoteNames>\n<useFrenchNoteNames>0</useFrenchNoteNames>\n<automaticCapitalization>1</automaticCapitalization>\n<lowerCaseMinorChords>0</lowerCaseMinorChords>\n<lowerCaseBassNotes>0</lowerCaseBassNotes>\n<allCapsNoteNames>0</allCapsNoteNames>\n<chordStyle>std</chordStyle>\n<chordsXmlFile>0</chordsXmlFile>\n<chordDescriptionFile>chords_std.xml</chordDescriptionFile>\n<chordExtensionMag>1</chordExtensionMag>\n<chordExtensionAdjust>0</chordExtensionAdjust>\n<chordModifierMag>1</chordModifierMag>\n<chordModifierAdjust>0</chordModifierAdjust>\n<concertPitch>0</concertPitch>\n<multiVoiceRestTwoSpaceOffset>0</multiVoiceRestTwoSpaceOffset>\n<mergeMatchingRests>0</mergeMatchingRests>\n<createMultiMeasureRests>0</createMultiMeasureRests>\n<minEmptyMeasures>2</minEmptyMeasures>\n<singleMeasureMMRestUseNormalRest>1</singleMeasureMMRestUseNormalRest>\n<singleMeasureMMRestShowNumber>1</singleMeasureMMRestShowNumber>\n<minMMRestWidth>4</minMMRestWidth>\n<mmRestConstantWidth>0</mmRestConstantWidth>\n<mmRestReferenceWidth>2</mmRestReferenceWidth>\n<mmRestMaxWidthIncrease>8</mmRestMaxWidthIncrease>\n<mmRestNumberPos>-0.5</mmRestNumberPos>\n<mmRestBetweenStaves>1</mmRestBetweenStaves>\n<mmRestNumberMaskHBar>1</mmRestNumberMaskHBar>\n<multiMeasureRestMargin>1.2</multiMeasureRestMargin>\n<mmRestHBarThickness>0.7</mmRestHBarThickness>\n<mmRestHBarVStrokeThickness>0.2</mmRestHBarVStrokeThickness>\n<mmRestHBarVStrokeHeight>2</mmRestHBarVStrokeHeight>\n<oldStyleMultiMeasureRests>0</oldStyleMultiMeasureRests>\n<mmRestOldStyleMaxMeasures>9</mmRestOldStyleMaxMeasures>\n<mmRestOldStyleSpacing>0.85</mmRestOldStyleSpacing>\n<hideEmptyStaves>0</hideEmptyStaves>\n<dontHideStavesInFirstSystem>1</dontHideStavesInFirstSystem>\n<enableIndentationOnFirstSystem>0</enableIndentationOnFirstSystem>\n<firstSystemIndentationValue>5</firstSystemIndentationValue>\n<alwaysShowBracketsWhenEmptyStavesAreHidden>0</alwaysShowBracketsWhenEmptyStavesAreHidden>\n<alwaysShowSquareBracketsWhenEmptyStavesAreHidden>0</alwaysShowSquareBracketsWhenEmptyStavesAreHidden>\n<hideInstrumentNameIfOneInstrument>1</hideInstrumentNameIfOneInstrument>\n<firstSystemInstNameVisibility>0</firstSystemInstNameVisibility>\n<subsSystemInstNameVisibility>1</subsSystemInstNameVisibility>\n<gateTime>100</gateTime>\n<tenutoGateTime>100</tenutoGateTime>\n<staccatoGateTime>50</staccatoGateTime>\n<slurGateTime>100</slurGateTime>\n<arpeggioNoteDistance>0.5</arpeggioNoteDistance>\n<arpeggioAccidentalDistance>0.3</arpeggioAccidentalDistance>\n<arpeggioAccidentalDistanceMin>0.33</arpeggioAccidentalDistanceMin>\n<arpeggioLineWidth>0.18</arpeggioLineWidth>\n<arpeggioHookLen>0.8</arpeggioHookLen>\n<arpeggioHiddenInStdIfTab>0</arpeggioHiddenInStdIfTab>\n<slurEndWidth>0.07</slurEndWidth>\n<slurMidWidth>0.21</slurMidWidth>\n<slurDottedWidth>0.1</slurDottedWidth>\n<tieEndWidth>0.07</tieEndWidth>\n<tieMidWidth>0.21</tieMidWidth>\n<tieDottedWidth>0.1</tieDottedWidth>\n<minTieLength>1</minTieLength>\n<minHangingTieLength>1.5</minHangingTieLength>\n<minStraightGlissandoLength>1.2</minStraightGlissandoLength>\n<minWigglyGlissandoLength>2</minWigglyGlissandoLength>\n<slurMinDistance>0.5</slurMinDistance>\n<tieMinDistance>0.5</tieMinDistance>\n<laissezVibMinDistance>0.5</laissezVibMinDistance>\n<headerToLineStartDistance>1</headerToLineStartDistance>\n<lineEndToBarlineDistance>0.25</lineEndToBarlineDistance>\n<tiePlacementSingleNote>outside</tiePlacementSingleNote>\n<tiePlacementChord>inside</tiePlacementChord>\n<tieDotsPlacement>auto</tieDotsPlacement>\n<tieMinShoulderHeight>0.3</tieMinShoulderHeight>\n<tieMaxShoulderHeight>2</tieMaxShoulderHeight>\n<minLaissezVibLength>2</minLaissezVibLength>\n<laissezVibUseSmuflSym>0</laissezVibUseSmuflSym>\n<sectionPause>3</sectionPause>\n<musicalSymbolFont>Leland</musicalSymbolFont>\n<musicalTextFont>Leland Text</musicalTextFont>\n<showHeader>1</showHeader>\n<headerFirstPage>0</headerFirstPage>\n<headerOddEven>1</headerOddEven>\n<evenHeaderL>$p</evenHeaderL>\n<evenHeaderC></evenHeaderC>\n<evenHeaderR></evenHeaderR>\n<oddHeaderL></oddHeaderL>\n<oddHeaderC></oddHeaderC>\n<oddHeaderR>$p</oddHeaderR>\n<showFooter>1</showFooter>\n<footerFirstPage>1</footerFirstPage>\n<footerOddEven>1</footerOddEven>\n<evenFooterL></evenFooterL>\n<evenFooterC>$:copyright:</evenFooterC>\n<evenFooterR></evenFooterR>\n<oddFooterL></oddFooterL>\n<oddFooterC>$:copyright:</oddFooterC>\n<oddFooterR></oddFooterR>\n<voltaPosAbove x="0" y="-3"/>\n<voltaHook>1.9</voltaHook>\n<voltaLineWidth>0.11</voltaLineWidth>\n<voltaLineStyle>solid</voltaLineStyle>\n<voltaDashLineLen>5</voltaDashLineLen>\n<voltaDashGapLen>5</voltaDashGapLen>\n<voltaFontFace>FreeSerif</voltaFontFace>\n<voltaFontSize>11</voltaFontSize>\n<voltaLineSpacing>1</voltaLineSpacing>\n<voltaFontSpatiumDependent>1</voltaFontSpatiumDependent>\n<voltaFontStyle>1</voltaFontStyle>\n<voltaColor r="0" g="0" b="0" a="255"/>\n<voltaAlign>left,baseline</voltaAlign>\n<voltaOffset x="0.5" y="1.9"/>\n<voltaFrameType>0</voltaFrameType>\n<voltaFramePadding>0.2</voltaFramePadding>\n<voltaFrameWidth>0.1</voltaFrameWidth>\n<voltaFrameRound>0</voltaFrameRound>\n<voltaFrameFgColor r="0" g="0" b="0" a="255"/>\n<voltaFrameBgColor r="255" g="255" b="255" a="0"/>\n<ottava8VAPlacement>0</ottava8VAPlacement>\n<ottava8VBPlacement>1</ottava8VBPlacement>\n<ottava15MAPlacement>0</ottava15MAPlacement>\n<ottava15MBPlacement>1</ottava15MBPlacement>\n<ottava22MAPlacement>0</ottava22MAPlacement>\n<ottava22MBPlacement>1</ottava22MBPlacement>\n<ottava8VAText>&lt;sym&gt;ottavaAlta&lt;/sym&gt;</ottava8VAText>\n<ottava8VAContinueText>&lt;sym&gt;ottavaAlta&lt;/sym&gt;</ottava8VAContinueText>\n<ottava8VBText>&lt;sym&gt;ottavaBassa&lt;/sym&gt;</ottava8VBText>\n<ottava8VBContinueText>&lt;sym&gt;ottavaBassa&lt;/sym&gt;</ottava8VBContinueText>\n<ottava15MAText>&lt;sym&gt;quindicesimaAlta&lt;/sym&gt;</ottava15MAText>\n<ottava15MAContinueText>&lt;sym&gt;quindicesimaAlta&lt;/sym&gt;</ottava15MAContinueText>\n<ottava15MBText>&lt;sym&gt;quindicesimaBassa&lt;/sym&gt;</ottava15MBText>\n<ottava15MBContinueText>&lt;sym&gt;quindicesimaBassa&lt;/sym&gt;</ottava15MBContinueText>\n<ottava22MAText>&lt;sym&gt;ventiduesimaAlta&lt;/sym&gt;</ottava22MAText>\n<ottava22MAContinueText>&lt;sym&gt;ventiduesimaAlta&lt;/sym&gt;</ottava22MAContinueText>\n<ottava22MBText>&lt;sym&gt;ventiduesimaBassa&lt;/sym&gt;</ottava22MBText>\n<ottava22MBContinueText>&lt;sym&gt;ventiduesimaBassa&lt;/sym&gt;</ottava22MBContinueText>\n<ottava8VAnoText>&lt;sym&gt;ottava&lt;/sym&gt;</ottava8VAnoText>\n<ottava8VAnoContinueText>&lt;sym&gt;ottava&lt;/sym&gt;</ottava8VAnoContinueText>\n<ottava8VBnoText>&lt;sym&gt;ottava&lt;/sym&gt;</ottava8VBnoText>\n<ottava8VBnoContinueText>&lt;sym&gt;ottava&lt;/sym&gt;</ottava8VBnoContinueText>\n<ottava15MAnoText>&lt;sym&gt;quindicesima&lt;/sym&gt;</ottava15MAnoText>\n<ottava15MAnoContinueText>&lt;sym&gt;quindicesima&lt;/sym&gt;</ottava15MAnoContinueText>\n<ottava15MBnoText>&lt;sym&gt;quindicesima&lt;/sym&gt;</ottava15MBnoText>\n<ottava15MBnoContinueText>&lt;sym&gt;quindicesima&lt;/sym&gt;</ottava15MBnoContinueText>\n<ottava22MAnoText>&lt;sym&gt;ventiduesima&lt;/sym&gt;</ottava22MAnoText>\n<ottava22MAnoContinueText>&lt;sym&gt;ventiduesima&lt;/sym&gt;</ottava22MAnoContinueText>\n<ottava22MBnoText>&lt;sym&gt;ventiduesima&lt;/sym&gt;</ottava22MBnoText>\n<ottava22MBnoContinueText>&lt;sym&gt;ventiduesima&lt;/sym&gt;</ottava22MBnoContinueText>\n<ottavaPosAbove x="0" y="-3"/>\n<ottavaPosBelow x="0" y="3"/>\n<ottavaHookAbove>1.9</ottavaHookAbove>\n<ottavaHookBelow>-1.9</ottavaHookBelow>\n<ottavaLineWidth>0.11</ottavaLineWidth>\n<ottavaLineStyle>dashed</ottavaLineStyle>\n<ottavaDashLineLen>6</ottavaDashLineLen>\n<ottavaDashGapLen>6</ottavaDashGapLen>\n<ottavaNumbersOnly>1</ottavaNumbersOnly>\n<ottavaFontFace>Edwin</ottavaFontFace>\n<ottavaFontSize>10</ottavaFontSize>\n<ottavaLineSpacing>1</ottavaLineSpacing>\n<ottavaFontSpatiumDependent>1</ottavaFontSpatiumDependent>\n<ottavaMusicalSymbolsScale>1</ottavaMusicalSymbolsScale>\n<ottavaFontStyle>0</ottavaFontStyle>\n<ottavaColor r="0" g="0" b="0" a="255"/>\n<ottavaTextAlignAbove>left,top</ottavaTextAlignAbove>\n<ottavaTextAlignBelow>left,baseline</ottavaTextAlignBelow>\n<ottavaFrameType>0</ottavaFrameType>\n<ottavaFramePadding>0.2</ottavaFramePadding>\n<ottavaFrameWidth>0.1</ottavaFrameWidth>\n<ottavaFrameRound>0</ottavaFrameRound>\n<ottavaFrameFgColor r="0" g="0" b="0" a="255"/>\n<ottavaFrameBgColor r="255" g="255" b="255" a="0"/>\n<tabClef>31</tabClef>\n<tremoloWidth>1.2</tremoloWidth>\n<tremoloBoxHeight>0.65</tremoloBoxHeight>\n<tremoloLineWidth>0.5</tremoloLineWidth>\n<tremoloDistance>0.8</tremoloDistance>\n<tremoloStyle>0</tremoloStyle>\n<tremoloStrokeLengthMultiplier>0.62</tremoloStrokeLengthMultiplier>\n<tremoloNoteSidePadding>1.25</tremoloNoteSidePadding>\n<tremoloOutSidePadding>0.5</tremoloOutSidePadding>\n<linearStretch>1.5</linearStretch>\n<crossMeasureValues>0</crossMeasureValues>\n<keySigNaturals>0</keySigNaturals>\n<tupletMaxSlope>0</tupletMaxSlope>\n<tupletOutOfStaff>1</tupletOutOfStaff>\n<tupletVHeadDistance>0.5</tupletVHeadDistance>\n<tupletVStemDistance>0.25</tupletVStemDistance>\n<tupletStemLeftDistance>0.5</tupletStemLeftDistance>\n<tupletStemRightDistance>0.5</tupletStemRightDistance>\n<tupletNoteLeftDistance>0</tupletNoteLeftDistance>\n<tupletNoteRightDistance>0</tupletNoteRightDistance>\n<tupletBracketWidth>0.1</tupletBracketWidth>\n<tupletDirection>0</tupletDirection>\n<tupletNumberType>0</tupletNumberType>\n<tupletBracketType>0</tupletBracketType>\n<tupletFontFace>Edwin</tupletFontFace>\n<tupletFontSize>9</tupletFontSize>\n<tupletLineSpacing>1</tupletLineSpacing>\n<tupletFontSpatiumDependent>1</tupletFontSpatiumDependent>\n<tupletMusicalSymbolsScale>1</tupletMusicalSymbolsScale>\n<tupletFontStyle>2</tupletFontStyle>\n<tupletColor r="0" g="0" b="0" a="255"/>\n<tupletAlign>center,center</tupletAlign>\n<tupletUseSymbols>0</tupletUseSymbols>\n<tupletBracketHookHeight>1</tupletBracketHookHeight>\n<tupletOffset x="0" y="0"/>\n<tupletFrameType>0</tupletFrameType>\n<tupletFramePadding>0.2</tupletFramePadding>\n<tupletFrameWidth>0.1</tupletFrameWidth>\n<tupletFrameRound>0</tupletFrameRound>\n<tupletFrameFgColor r="0" g="0" b="0" a="255"/>\n<tupletFrameBgColor r="255" g="255" b="255" a="0"/>\n<scaleBarlines>1</scaleBarlines>\n<barGraceDistance>0.6</barGraceDistance>\n<minVerticalDistance>0.5</minVerticalDistance>\n<skylineMinHorizontalClearance>0.25</skylineMinHorizontalClearance>\n<ornamentStyle>0</ornamentStyle>\n<autoplaceHairpinDynamicsDistance>0.5</autoplaceHairpinDynamicsDistance>\n<dynamicsHairpinVoiceBasedPlacement>0</dynamicsHairpinVoiceBasedPlacement>\n<dynamicsHairpinsAutoCenterOnGrandStaff>1</dynamicsHairpinsAutoCenterOnGrandStaff>\n<dynamicsHairpinsAboveForVocalStaves>1</dynamicsHairpinsAboveForVocalStaves>\n<dynamicsOverrideFont>0</dynamicsOverrideFont>\n<dynamicsFont>Leland</dynamicsFont>\n<dynamicsSize>1</dynamicsSize>\n<dynamicsPlacement>1</dynamicsPlacement>\n<dynamicsPosAbove x="0" y="-1.5"/>\n<dynamicsPosBelow x="0" y="4"/>\n<avoidBarLines>1</avoidBarLines>\n<snapToDynamics>1</snapToDynamics>\n<centerOnNotehead>1</centerOnNotehead>\n<dynamicsMinDistance>0.5</dynamicsMinDistance>\n<autoplaceVerticalAlignRange>2</autoplaceVerticalAlignRange>\n<textLinePlacement>0</textLinePlacement>\n<textLinePosAbove x="0" y="-1"/>\n<textLinePosBelow x="0" y="1"/>\n<textLineFrameType>0</textLineFrameType>\n<textLineFramePadding>0.2</textLineFramePadding>\n<textLineFrameWidth>0.1</textLineFrameWidth>\n<textLineFrameRound>0</textLineFrameRound>\n<textLineFrameFgColor r="0" g="0" b="0" a="255"/>\n<textLineFrameBgColor r="255" g="255" b="255" a="0"/>\n<systemTextLinePlacement>0</systemTextLinePlacement>\n<systemTextLinePosAbove x="0" y="-1"/>\n<systemTextLinePosBelow x="0" y="1"/>\n<systemTextLineFrameType>0</systemTextLineFrameType>\n<systemTextLineFramePadding>0.2</systemTextLineFramePadding>\n<systemTextLineFrameWidth>0.1</systemTextLineFrameWidth>\n<systemTextLineFrameRound>0</systemTextLineFrameRound>\n<systemTextLineFrameFgColor r="0" g="0" b="0" a="255"/>\n<systemTextLineFrameBgColor r="255" g="255" b="255" a="0"/>\n<tremoloBarLineWidth>0.12</tremoloBarLineWidth>\n<jumpPosAbove x="0" y="-2"/>\n<markerPosAbove x="0" y="-2"/>\n<defaultFontFace>Edwin</defaultFontFace>\n<defaultFontSize>10</defaultFontSize>\n<defaultLineSpacing>1</defaultLineSpacing>\n<defaultFontSpatiumDependent>1</defaultFontSpatiumDependent>\n<defaultFontStyle>0</defaultFontStyle>\n<defaultColor r="0" g="0" b="0" a="255"/>\n<defaultAlign>left,top</defaultAlign>\n<defaultFrameType>0</defaultFrameType>\n<defaultFramePadding>0.2</defaultFramePadding>\n<defaultFrameWidth>0.1</defaultFrameWidth>\n<defaultFrameRound>0</defaultFrameRound>\n<defaultFrameFgColor r="0" g="0" b="0" a="255"/>\n<defaultFrameBgColor r="255" g="255" b="255" a="0"/>\n<defaultOffset x="0" y="0"/>\n<defaultOffsetType>1</defaultOffsetType>\n<defaultSystemFlag>0</defaultSystemFlag>\n<defaultText></defaultText>\n<titleFontFace>Edwin</titleFontFace>\n<titleFontSize>20</titleFontSize>\n<titleLineSpacing>1</titleLineSpacing>\n<titleFontSpatiumDependent>0</titleFontSpatiumDependent>\n<titleFontStyle>0</titleFontStyle>\n<titleColor r="0" g="0" b="0" a="255"/>\n<titleAlign>center,top</titleAlign>\n<titleOffset x="0" y="0"/>\n<titleOffsetType>0</titleOffsetType>\n<titleFrameType>0</titleFrameType>\n<titleFramePadding>0.2</titleFramePadding>\n<titleFrameWidth>0.1</titleFrameWidth>\n<titleFrameRound>0</titleFrameRound>\n<titleFrameFgColor r="0" g="0" b="0" a="255"/>\n<titleFrameBgColor r="255" g="255" b="255" a="0"/>\n<subTitleFontFace>Edwin</subTitleFontFace>\n<subTitleFontSize>14</subTitleFontSize>\n<subTitleLineSpacing>1</subTitleLineSpacing>\n<subTitleFontSpatiumDependent>0</subTitleFontSpatiumDependent>\n<subTitleFontStyle>0</subTitleFontStyle>\n<subTitleColor r="0" g="0" b="0" a="255"/>\n<subTitleAlign>center,top</subTitleAlign>\n<subTitleOffset x="0" y="10"/>\n<subTitleOffsetType>0</subTitleOffsetType>\n<subTitleFrameType>0</subTitleFrameType>\n<subTitleFramePadding>0.2</subTitleFramePadding>\n<subTitleFrameWidth>0.1</subTitleFrameWidth>\n<subTitleFrameRound>0</subTitleFrameRound>\n<subTitleFrameFgColor r="0" g="0" b="0" a="255"/>\n<subTitleFrameBgColor r="255" g="255" b="255" a="0"/>\n<composerFontFace>Edwin</composerFontFace>\n<composerFontSize>10</composerFontSize>\n<composerLineSpacing>1</composerLineSpacing>\n<composerFontSpatiumDependent>0</composerFontSpatiumDependent>\n<composerFontStyle>0</composerFontStyle>\n<composerColor r="0" g="0" b="0" a="255"/>\n<composerAlign>right,bottom</composerAlign>\n<composerOffset x="0" y="0"/>\n<composerOffsetType>0</composerOffsetType>\n<composerFrameType>0</composerFrameType>\n<composerFramePadding>0.2</composerFramePadding>\n<composerFrameWidth>0.1</composerFrameWidth>\n<composerFrameRound>0</composerFrameRound>\n<composerFrameFgColor r="0" g="0" b="0" a="255"/>\n<composerFrameBgColor r="255" g="255" b="255" a="0"/>\n<lyricistFontFace>Edwin</lyricistFontFace>\n<lyricistFontSize>10</lyricistFontSize>\n<lyricistLineSpacing>1</lyricistLineSpacing>\n<lyricistFontSpatiumDependent>0</lyricistFontSpatiumDependent>\n<lyricistFontStyle>0</lyricistFontStyle>\n<lyricistColor r="0" g="0" b="0" a="255"/>\n<lyricistAlign>left,bottom</lyricistAlign>\n<lyricistOffset x="0" y="0"/>\n<lyricistOffsetType>0</lyricistOffsetType>\n<lyricistFrameType>0</lyricistFrameType>\n<lyricistFramePadding>0.2</lyricistFramePadding>\n<lyricistFrameWidth>0.1</lyricistFrameWidth>\n<lyricistFrameRound>0</lyricistFrameRound>\n<lyricistFrameFgColor r="0" g="0" b="0" a="255"/>\n<lyricistFrameBgColor r="255" g="255" b="255" a="0"/>\n<fingeringFontFace>Edwin</fingeringFontFace>\n<fingeringFontSize>8</fingeringFontSize>\n<fingeringLineSpacing>1</fingeringLineSpacing>\n<fingeringFontSpatiumDependent>1</fingeringFontSpatiumDependent>\n<fingeringFontStyle>0</fingeringFontStyle>\n<fingeringColor r="0" g="0" b="0" a="255"/>\n<fingeringAlign>center,center</fingeringAlign>\n<fingeringFrameType>0</fingeringFrameType>\n<fingeringFramePadding>0.2</fingeringFramePadding>\n<fingeringFrameWidth>0.1</fingeringFrameWidth>\n<fingeringFrameRound>0</fingeringFrameRound>\n<fingeringFrameFgColor r="0" g="0" b="0" a="255"/>\n<fingeringFrameBgColor r="255" g="255" b="255" a="0"/>\n<fingeringOffset x="0" y="0"/>\n<lhGuitarFingeringFontFace>Edwin</lhGuitarFingeringFontFace>\n<lhGuitarFingeringFontSize>8</lhGuitarFingeringFontSize>\n<lhGuitarFingeringLineSpacing>1</lhGuitarFingeringLineSpacing>\n<lhGuitarFingeringFontSpatiumDependent>1</lhGuitarFingeringFontSpatiumDependent>\n<lhGuitarFingeringFontStyle>0</lhGuitarFingeringFontStyle>\n<lhGuitarFingeringColor r="0" g="0" b="0" a="255"/>\n<lhGuitarFingeringAlign>right,center</lhGuitarFingeringAlign>\n<lhGuitarFingeringFrameType>0</lhGuitarFingeringFrameType>\n<lhGuitarFingeringFramePadding>0.2</lhGuitarFingeringFramePadding>\n<lhGuitarFingeringFrameWidth>0.1</lhGuitarFingeringFrameWidth>\n<lhGuitarFingeringFrameRound>0</lhGuitarFingeringFrameRound>\n<lhGuitarFingeringFrameFgColor r="0" g="0" b="0" a="255"/>\n<lhGuitarFingeringFrameBgColor r="255" g="255" b="255" a="0"/>\n<lhGuitarFingeringOffset x="-0.5" y="0"/>\n<rhGuitarFingeringFontFace>Edwin</rhGuitarFingeringFontFace>\n<rhGuitarFingeringFontSize>8</rhGuitarFingeringFontSize>\n<rhGuitarFingeringLineSpacing>1</rhGuitarFingeringLineSpacing>\n<rhGuitarFingeringFontSpatiumDependent>1</rhGuitarFingeringFontSpatiumDependent>\n<rhGuitarFingeringFontStyle>2</rhGuitarFingeringFontStyle>\n<rhGuitarFingeringColor r="0" g="0" b="0" a="255"/>\n<rhGuitarFingeringAlign>center,center</rhGuitarFingeringAlign>\n<rhGuitarFingeringFrameType>0</rhGuitarFingeringFrameType>\n<rhGuitarFingeringFramePadding>0.2</rhGuitarFingeringFramePadding>\n<rhGuitarFingeringFrameWidth>0.1</rhGuitarFingeringFrameWidth>\n<rhGuitarFingeringFrameRound>0</rhGuitarFingeringFrameRound>\n<rhGuitarFingeringFrameFgColor r="0" g="0" b="0" a="255"/>\n<rhGuitarFingeringFrameBgColor r="255" g="255" b="255" a="0"/>\n<rhGuitarFingeringOffset x="0" y="0"/>\n<stringNumberFontFace>Edwin</stringNumberFontFace>\n<stringNumberFontSize>8</stringNumberFontSize>\n<stringNumberLineSpacing>1</stringNumberLineSpacing>\n<stringNumberFontSpatiumDependent>1</stringNumberFontSpatiumDependent>\n<stringNumberFontStyle>0</stringNumberFontStyle>\n<stringNumberColor r="0" g="0" b="0" a="255"/>\n<stringNumberAlign>center,center</stringNumberAlign>\n<stringNumberFrameType>2</stringNumberFrameType>\n<stringNumberFramePadding>0.2</stringNumberFramePadding>\n<stringNumberFrameWidth>0.1</stringNumberFrameWidth>\n<stringNumberFrameRound>0</stringNumberFrameRound>\n<stringNumberFrameFgColor r="0" g="0" b="0" a="255"/>\n<stringNumberFrameBgColor r="255" g="255" b="255" a="0"/>\n<stringNumberOffset x="0" y="0"/>\n<preferSameStringForTranspose>0</preferSameStringForTranspose>\n<stringTuningsFontSize>9</stringTuningsFontSize>\n<harpPedalDiagramFontFace>Edwin</harpPedalDiagramFontFace>\n<harpPedalDiagramFontSize>10</harpPedalDiagramFontSize>\n<harpPedalDiagramLineSpacing>1</harpPedalDiagramLineSpacing>\n<harpPedalDiagramFontSpatiumDependent>1</harpPedalDiagramFontSpatiumDependent>\n<harpPedalDiagramMusicalSymbolsScale>1</harpPedalDiagramMusicalSymbolsScale>\n<harpPedalDiagramFontStyle>0</harpPedalDiagramFontStyle>\n<harpPedalDiagramColor r="0" g="0" b="0" a="255"/>\n<harpPedalDiagramAlign>center,center</harpPedalDiagramAlign>\n<harpPedalDiagramFrameType>0</harpPedalDiagramFrameType>\n<harpPedalDiagramFramePadding>0.2</harpPedalDiagramFramePadding>\n<harpPedalDiagramFrameWidth>0.1</harpPedalDiagramFrameWidth>\n<harpPedalDiagramFrameRound>0</harpPedalDiagramFrameRound>\n<harpPedalDiagramFrameFgColor r="0" g="0" b="0" a="255"/>\n<harpPedalDiagramFrameBgColor r="255" g="255" b="255" a="0"/>\n<harpPedalDiagramOffset x="0" y="0"/>\n<harpPedalDiagramPlacement>0</harpPedalDiagramPlacement>\n<harpPedalDiagramPosAbove x="0" y="-1"/>\n<harpPedalDiagramPosBelow x="0" y="2.5"/>\n<harpPedalDiagramMinDistance>0.5</harpPedalDiagramMinDistance>\n<harpPedalTextDiagramFontFace>Edwin</harpPedalTextDiagramFontFace>\n<harpPedalTextDiagramFontSize>8</harpPedalTextDiagramFontSize>\n<harpPedalTextDiagramLineSpacing>1</harpPedalTextDiagramLineSpacing>\n<harpPedalTextDiagramFontSpatiumDependent>1</harpPedalTextDiagramFontSpatiumDependent>\n<harpPedalTextDiagramFontStyle>0</harpPedalTextDiagramFontStyle>\n<harpPedalTextDiagramColor r="0" g="0" b="0" a="255"/>\n<harpPedalTextDiagramAlign>left,baseline</harpPedalTextDiagramAlign>\n<harpPedalTextDiagramFrameType>0</harpPedalTextDiagramFrameType>\n<harpPedalTextDiagramFramePadding>0.2</harpPedalTextDiagramFramePadding>\n<harpPedalTextDiagramFrameWidth>0.1</harpPedalTextDiagramFrameWidth>\n<harpPedalTextDiagramFrameRound>0</harpPedalTextDiagramFrameRound>\n<harpPedalTextDiagramFrameFgColor r="0" g="0" b="0" a="255"/>\n<harpPedalTextDiagramFrameBgColor r="255" g="255" b="255" a="0"/>\n<harpPedalTextDiagramOffset x="0" y="0"/>\n<harpPedalTextDiagramPlacement>1</harpPedalTextDiagramPlacement>\n<harpPedalTextDiagramPosAbove x="0" y="-1.5"/>\n<harpPedalTextDiagramPosBelow x="0" y="2.5"/>\n<harpPedalTextDiagramMinDistance>0.5</harpPedalTextDiagramMinDistance>\n<longInstrumentFontFace>Edwin</longInstrumentFontFace>\n<longInstrumentFontSize>10</longInstrumentFontSize>\n<longInstrumentLineSpacing>1</longInstrumentLineSpacing>\n<longInstrumentFontSpatiumDependent>1</longInstrumentFontSpatiumDependent>\n<longInstrumentFontStyle>0</longInstrumentFontStyle>\n<longInstrumentColor r="0" g="0" b="0" a="255"/>\n<longInstrumentAlign>right,center</longInstrumentAlign>\n<longInstrumentOffset x="0" y="0"/>\n<longInstrumentFrameType>0</longInstrumentFrameType>\n<longInstrumentFramePadding>0.2</longInstrumentFramePadding>\n<longInstrumentFrameWidth>0.1</longInstrumentFrameWidth>\n<longInstrumentFrameRound>0</longInstrumentFrameRound>\n<longInstrumentFrameFgColor r="0" g="0" b="0" a="255"/>\n<longInstrumentFrameBgColor r="255" g="255" b="255" a="0"/>\n<shortInstrumentFontFace>Edwin</shortInstrumentFontFace>\n<shortInstrumentFontSize>10</shortInstrumentFontSize>\n<shortInstrumentLineSpacing>1</shortInstrumentLineSpacing>\n<shortInstrumentFontSpatiumDependent>1</shortInstrumentFontSpatiumDependent>\n<shortInstrumentFontStyle>0</shortInstrumentFontStyle>\n<shortInstrumentColor r="0" g="0" b="0" a="255"/>\n<shortInstrumentAlign>right,center</shortInstrumentAlign>\n<shortInstrumentOffset x="0" y="0"/>\n<shortInstrumentFrameType>0</shortInstrumentFrameType>\n<shortInstrumentFramePadding>0.2</shortInstrumentFramePadding>\n<shortInstrumentFrameWidth>0.1</shortInstrumentFrameWidth>\n<shortInstrumentFrameRound>0</shortInstrumentFrameRound>\n<shortInstrumentFrameFgColor r="0" g="0" b="0" a="255"/>\n<shortInstrumentFrameBgColor r="255" g="255" b="255" a="0"/>\n<partInstrumentFontFace>Edwin</partInstrumentFontFace>\n<partInstrumentFontSize>14</partInstrumentFontSize>\n<partInstrumentLineSpacing>1</partInstrumentLineSpacing>\n<partInstrumentFontSpatiumDependent>0</partInstrumentFontSpatiumDependent>\n<partInstrumentFontStyle>0</partInstrumentFontStyle>\n<partInstrumentColor r="0" g="0" b="0" a="255"/>\n<partInstrumentAlign>left,top</partInstrumentAlign>\n<partInstrumentOffset x="0" y="0"/>\n<partInstrumentFrameType>0</partInstrumentFrameType>\n<partInstrumentFramePadding>0.2</partInstrumentFramePadding>\n<partInstrumentFrameWidth>0.1</partInstrumentFrameWidth>\n<partInstrumentFrameRound>0</partInstrumentFrameRound>\n<partInstrumentFrameFgColor r="0" g="0" b="0" a="255"/>\n<partInstrumentFrameBgColor r="255" g="255" b="255" a="0"/>\n<dynamicsFontFace>Edwin</dynamicsFontFace>\n<dynamicsFontSize>10</dynamicsFontSize>\n<dynamicsLineSpacing>1</dynamicsLineSpacing>\n<dynamicsFontSpatiumDependent>1</dynamicsFontSpatiumDependent>\n<dynamicsFontStyle>2</dynamicsFontStyle>\n<dynamicsColor r="0" g="0" b="0" a="255"/>\n<dynamicsAlign>center,baseline</dynamicsAlign>\n<dynamicsFrameType>0</dynamicsFrameType>\n<dynamicsFramePadding>0.2</dynamicsFramePadding>\n<dynamicsFrameWidth>0.1</dynamicsFrameWidth>\n<dynamicsFrameRound>0</dynamicsFrameRound>\n<dynamicsFrameFgColor r="0" g="0" b="0" a="255"/>\n<dynamicsFrameBgColor r="255" g="255" b="255" a="0"/>\n<expressionFontFace>Edwin</expressionFontFace>\n<expressionFontSize>10</expressionFontSize>\n<expressionLineSpacing>1</expressionLineSpacing>\n<expressionFontSpatiumDependent>1</expressionFontSpatiumDependent>\n<expressionFontStyle>2</expressionFontStyle>\n<expressionColor r="0" g="0" b="0" a="255"/>\n<expressionAlign>left,baseline</expressionAlign>\n<expressionPlacement>1</expressionPlacement>\n<expressionOffset x="0" y="3.5"/>\n<expressionPosAbove x="0" y="-1.5"/>\n<expressionPosBelow x="0" y="2.5"/>\n<expressionFrameType>0</expressionFrameType>\n<expressionFramePadding>0.2</expressionFramePadding>\n<expressionFrameWidth>0.1</expressionFrameWidth>\n<expressionFrameRound>0</expressionFrameRound>\n<expressionFrameFgColor r="0" g="0" b="0" a="255"/>\n<expressionFrameBgColor r="255" g="255" b="255" a="0"/>\n<expressionMinDistance>0.5</expressionMinDistance>\n<tempoFontFace>Edwin</tempoFontFace>\n<tempoFontSize>12</tempoFontSize>\n<tempoLineSpacing>1</tempoLineSpacing>\n<tempoFontSpatiumDependent>1</tempoFontSpatiumDependent>\n<tempoFontStyle>1</tempoFontStyle>\n<tempoColor r="0" g="0" b="0" a="255"/>\n<tempoAlign>left,baseline</tempoAlign>\n<tempoSystemFlag>1</tempoSystemFlag>\n<tempoPlacement>0</tempoPlacement>\n<tempoPosAbove x="0" y="-2"/>\n<tempoPosBelow x="0" y="3"/>\n<tempoMinDistance>0.5</tempoMinDistance>\n<tempoFrameType>0</tempoFrameType>\n<tempoFramePadding>0.2</tempoFramePadding>\n<tempoFrameWidth>0.1</tempoFrameWidth>\n<tempoFrameRound>0</tempoFrameRound>\n<tempoFrameFgColor r="0" g="0" b="0" a="255"/>\n<tempoFrameBgColor r="255" g="255" b="255" a="0"/>\n<tempoChangeFontFace>Edwin</tempoChangeFontFace>\n<tempoChangeFontSize>12</tempoChangeFontSize>\n<tempoChangeLineSpacing>1</tempoChangeLineSpacing>\n<tempoChangeFontSpatiumDependent>1</tempoChangeFontSpatiumDependent>\n<tempoChangeFontStyle>1</tempoChangeFontStyle>\n<tempoChangeColor r="0" g="0" b="0" a="255"/>\n<tempoChangeAlign>left,baseline</tempoChangeAlign>\n<tempoChangeSystemFlag>1</tempoChangeSystemFlag>\n<tempoChangePlacement>0</tempoChangePlacement>\n<tempoChangePosAbove x="0" y="-2"/>\n<tempoChangePosBelow x="0" y="3"/>\n<tempoChangeMinDistance>0.5</tempoChangeMinDistance>\n<tempoChangeFrameType>0</tempoChangeFrameType>\n<tempoChangeFramePadding>0.2</tempoChangeFramePadding>\n<tempoChangeFrameWidth>0.1</tempoChangeFrameWidth>\n<tempoChangeFrameRound>0</tempoChangeFrameRound>\n<tempoChangeFrameFgColor r="0" g="0" b="0" a="255"/>\n<tempoChangeFrameBgColor r="255" g="255" b="255" a="0"/>\n<tempoChangeLineWidth>0.12</tempoChangeLineWidth>\n<tempoChangeLineStyle>dashed</tempoChangeLineStyle>\n<tempoChangeDashLineLen>5</tempoChangeDashLineLen>\n<tempoChangeDashGapLen>20</tempoChangeDashGapLen>\n<metronomeFontFace>Edwin</metronomeFontFace>\n<metronomeFontSize>12</metronomeFontSize>\n<metronomeLineSpacing>1</metronomeLineSpacing>\n<metronomeFontSpatiumDependent>0</metronomeFontSpatiumDependent>\n<metronomeFontStyle>0</metronomeFontStyle>\n<metronomeColor r="0" g="0" b="0" a="255"/>\n<metronomePlacement>0</metronomePlacement>\n<metronomeAlign>left,top</metronomeAlign>\n<metronomeOffset x="0" y="0"/>\n<metronomeFrameType>0</metronomeFrameType>\n<metronomeFramePadding>0.2</metronomeFramePadding>\n<metronomeFrameWidth>0.1</metronomeFrameWidth>\n<metronomeFrameRound>0</metronomeFrameRound>\n<metronomeFrameFgColor r="0" g="0" b="0" a="255"/>\n<metronomeFrameBgColor r="255" g="255" b="255" a="0"/>\n<measureNumberFontFace>Edwin</measureNumberFontFace>\n<measureNumberFontSize>8</measureNumberFontSize>\n<measureNumberLineSpacing>1</measureNumberLineSpacing>\n<measureNumberFontSpatiumDependent>0</measureNumberFontSpatiumDependent>\n<measureNumberFontStyle>2</measureNumberFontStyle>\n<measureNumberColor r="0" g="0" b="0" a="255"/>\n<measureNumberPosAbove x="0" y="-2"/>\n<measureNumberPosBelow x="0" y="2"/>\n<measureNumberOffsetType>1</measureNumberOffsetType>\n<measureNumberVPlacement>0</measureNumberVPlacement>\n<measureNumberHPlacement>0</measureNumberHPlacement>\n<measureNumberMinDistance>0.5</measureNumberMinDistance>\n<measureNumberAlign>center,baseline</measureNumberAlign>\n<measureNumberFrameType>0</measureNumberFrameType>\n<measureNumberFramePadding>0.2</measureNumberFramePadding>\n<measureNumberFrameWidth>0.1</measureNumberFrameWidth>\n<measureNumberFrameRound>0</measureNumberFrameRound>\n<measureNumberFrameFgColor r="0" g="0" b="0" a="255"/>\n<measureNumberFrameBgColor r="255" g="255" b="255" a="0"/>\n<mmRestShowMeasureNumberRange>0</mmRestShowMeasureNumberRange>\n<mmRestRangeBracketType>0</mmRestRangeBracketType>\n<mmRestRangeFontFace>Edwin</mmRestRangeFontFace>\n<mmRestRangeFontSize>8</mmRestRangeFontSize>\n<mmRestRangeFontSpatiumDependent>0</mmRestRangeFontSpatiumDependent>\n<mmRestRangeFontStyle>2</mmRestRangeFontStyle>\n<mmRestRangeColor r="0" g="0" b="0" a="255"/>\n<mmRestRangePosAbove x="0" y="-3"/>\n<mmRestRangePosBelow x="0" y="1"/>\n<mmRestRangeOffsetType>1</mmRestRangeOffsetType>\n<mmRestRangeVPlacement>1</mmRestRangeVPlacement>\n<mmRestRangeHPlacement>1</mmRestRangeHPlacement>\n<mmRestRangeAlign>center,baseline</mmRestRangeAlign>\n<mmRestRangeFrameType>0</mmRestRangeFrameType>\n<mmRestRangeFramePadding>0.2</mmRestRangeFramePadding>\n<mmRestRangeFrameWidth>0.1</mmRestRangeFrameWidth>\n<mmRestRangeFrameRound>0</mmRestRangeFrameRound>\n<mmRestRangeFrameFgColor r="0" g="0" b="0" a="255"/>\n<mmRestRangeFrameBgColor r="255" g="255" b="255" a="0"/>\n<mmRestRangeMinDistance>0.5</mmRestRangeMinDistance>\n<translatorFontFace>Edwin</translatorFontFace>\n<translatorFontSize>10</translatorFontSize>\n<translatorLineSpacing>1</translatorLineSpacing>\n<translatorFontSpatiumDependent>0</translatorFontSpatiumDependent>\n<translatorFontStyle>0</translatorFontStyle>\n<translatorColor r="0" g="0" b="0" a="255"/>\n<translatorAlign>left,top</translatorAlign>\n<translatorOffset x="0" y="0"/>\n<translatorFrameType>0</translatorFrameType>\n<translatorFramePadding>0.2</translatorFramePadding>\n<translatorFrameWidth>0.1</translatorFrameWidth>\n<translatorFrameRound>0</translatorFrameRound>\n<translatorFrameFgColor r="0" g="0" b="0" a="255"/>\n<translatorFrameBgColor r="255" g="255" b="255" a="0"/>\n<systemTextFontFace>Edwin</systemTextFontFace>\n<systemTextFontSize>10</systemTextFontSize>\n<systemTextLineSpacing>1</systemTextLineSpacing>\n<systemTextFontSpatiumDependent>1</systemTextFontSpatiumDependent>\n<systemTextFontStyle>0</systemTextFontStyle>\n<systemTextColor r="0" g="0" b="0" a="255"/>\n<systemTextAlign>left,baseline</systemTextAlign>\n<systemTextOffsetType>1</systemTextOffsetType>\n<systemTextPlacement>0</systemTextPlacement>\n<systemTextPosAbove x="0" y="-2"/>\n<systemTextPosBelow x="0" y="3.5"/>\n<systemTextMinDistance>0.5</systemTextMinDistance>\n<systemTextFrameType>0</systemTextFrameType>\n<systemTextFramePadding>0.2</systemTextFramePadding>\n<systemTextFrameWidth>0.1</systemTextFrameWidth>\n<systemTextFrameRound>0</systemTextFrameRound>\n<systemTextFrameFgColor r="0" g="0" b="0" a="255"/>\n<systemTextFrameBgColor r="255" g="255" b="255" a="0"/>\n<staffTextFontFace>Edwin</staffTextFontFace>\n<staffTextFontSize>10</staffTextFontSize>\n<staffTextLineSpacing>1</staffTextLineSpacing>\n<staffTextFontSpatiumDependent>1</staffTextFontSpatiumDependent>\n<staffTextFontStyle>0</staffTextFontStyle>\n<staffTextColor r="0" g="0" b="0" a="255"/>\n<staffTextAlign>left,baseline</staffTextAlign>\n<staffTextOffsetType>1</staffTextOffsetType>\n<staffTextPlacement>0</staffTextPlacement>\n<staffTextPosAbove x="0" y="-2"/>\n<staffTextPosBelow x="0" y="3.5"/>\n<staffTextMinDistance>0.5</staffTextMinDistance>\n<staffTextFrameType>0</staffTextFrameType>\n<staffTextFramePadding>0.2</staffTextFramePadding>\n<staffTextFrameWidth>0.1</staffTextFrameWidth>\n<staffTextFrameRound>0</staffTextFrameRound>\n<staffTextFrameFgColor r="0" g="0" b="0" a="255"/>\n<staffTextFrameBgColor r="255" g="255" b="255" a="0"/>\n<fretDiagramFingeringFontFace>FreeSans</fretDiagramFingeringFontFace>\n<fretDiagramFingeringFontSize>6</fretDiagramFingeringFontSize>\n<fretDiagramFingeringLineSpacing>1</fretDiagramFingeringLineSpacing>\n<fretDiagramFingeringFontSpatiumDependent>1</fretDiagramFingeringFontSpatiumDependent>\n<fretDiagramFingeringFontStyle>0</fretDiagramFingeringFontStyle>\n<fretDiagramFingeringColor r="0" g="0" b="0" a="255"/>\n<fretDiagramFingeringAlign>left,baseline</fretDiagramFingeringAlign>\n<fretDiagramFingeringPosAbove x="0" y="-1"/>\n<fretDiagramFingeringFrameType>0</fretDiagramFingeringFrameType>\n<fretDiagramFingeringFramePadding>0.2</fretDiagramFingeringFramePadding>\n<fretDiagramFingeringFrameWidth>0.1</fretDiagramFingeringFrameWidth>\n<fretDiagramFingeringFrameRound>0</fretDiagramFingeringFrameRound>\n<fretDiagramFingeringFrameFgColor r="0" g="0" b="0" a="255"/>\n<fretDiagramFingeringFrameBgColor r="255" g="255" b="255" a="0"/>\n<fretDiagramFretNumberFontFace>FreeSans</fretDiagramFretNumberFontFace>\n<fretDiagramFretNumberFontSize>6</fretDiagramFretNumberFontSize>\n<fretDiagramFretNumberLineSpacing>1</fretDiagramFretNumberLineSpacing>\n<fretDiagramFretNumberFontSpatiumDependent>1</fretDiagramFretNumberFontSpatiumDependent>\n<fretDiagramFretNumberFontStyle>0</fretDiagramFretNumberFontStyle>\n<fretDiagramFretNumberColor r="0" g="0" b="0" a="255"/>\n<fretDiagramFretNumberAlign>left,baseline</fretDiagramFretNumberAlign>\n<fretDiagramFretNumberPosAbove x="0" y="-1"/>\n<fretDiagramFretNumberFrameType>0</fretDiagramFretNumberFrameType>\n<fretDiagramFretNumberFramePadding>0.2</fretDiagramFretNumberFramePadding>\n<fretDiagramFretNumberFrameWidth>0.1</fretDiagramFretNumberFrameWidth>\n<fretDiagramFretNumberFrameRound>0</fretDiagramFretNumberFrameRound>\n<fretDiagramFretNumberFrameFgColor r="0" g="0" b="0" a="255"/>\n<fretDiagramFretNumberFrameBgColor r="255" g="255" b="255" a="0"/>\n<rehearsalMarkFontFace>Edwin</rehearsalMarkFontFace>\n<rehearsalMarkFontSize>14</rehearsalMarkFontSize>\n<rehearsalMarkLineSpacing>1</rehearsalMarkLineSpacing>\n<rehearsalMarkFontSpatiumDependent>1</rehearsalMarkFontSpatiumDependent>\n<rehearsalMarkFontStyle>1</rehearsalMarkFontStyle>\n<rehearsalMarkColor r="0" g="0" b="0" a="255"/>\n<rehearsalMarkAlign>center,baseline</rehearsalMarkAlign>\n<rehearsalMarkFrameType>1</rehearsalMarkFrameType>\n<rehearsalMarkFramePadding>0.5</rehearsalMarkFramePadding>\n<rehearsalMarkFrameWidth>0.16</rehearsalMarkFrameWidth>\n<rehearsalMarkFrameRound>0</rehearsalMarkFrameRound>\n<rehearsalMarkFrameFgColor r="0" g="0" b="0" a="255"/>\n<rehearsalMarkFrameBgColor r="255" g="255" b="255" a="0"/>\n<rehearsalMarkPlacement>0</rehearsalMarkPlacement>\n<rehearsalMarkPosAbove x="0" y="-3"/>\n<rehearsalMarkPosBelow x="0" y="4"/>\n<rehearsalMarkMinDistance>0.5</rehearsalMarkMinDistance>\n<repeatLeftFontFace>Edwin</repeatLeftFontFace>\n<repeatLeftFontSize>18</repeatLeftFontSize>\n<repeatLeftLineSpacing>1</repeatLeftLineSpacing>\n<repeatLeftFontSpatiumDependent>1</repeatLeftFontSpatiumDependent>\n<repeatLeftFontStyle>0</repeatLeftFontStyle>\n<repeatLeftColor r="0" g="0" b="0" a="255"/>\n<repeatLeftAlign>left,baseline</repeatLeftAlign>\n<repeatLeftPlacement>0</repeatLeftPlacement>\n<repeatLeftFrameType>0</repeatLeftFrameType>\n<repeatLeftFramePadding>0.2</repeatLeftFramePadding>\n<repeatLeftFrameWidth>0.1</repeatLeftFrameWidth>\n<repeatLeftFrameRound>0</repeatLeftFrameRound>\n<repeatLeftFrameFgColor r="0" g="0" b="0" a="255"/>\n<repeatLeftFrameBgColor r="255" g="255" b="255" a="0"/>\n<repeatRightFontFace>Edwin</repeatRightFontFace>\n<repeatRightFontSize>11</repeatRightFontSize>\n<repeatRightLineSpacing>1</repeatRightLineSpacing>\n<repeatRightFontSpatiumDependent>1</repeatRightFontSpatiumDependent>\n<repeatRightFontStyle>0</repeatRightFontStyle>\n<repeatRightColor r="0" g="0" b="0" a="255"/>\n<repeatRightAlign>right,baseline</repeatRightAlign>\n<repeatRightPlacement>0</repeatRightPlacement>\n<repeatRightFrameType>0</repeatRightFrameType>\n<repeatRightFramePadding>0.2</repeatRightFramePadding>\n<repeatRightFrameWidth>0.1</repeatRightFrameWidth>\n<repeatRightFrameRound>0</repeatRightFrameRound>\n<repeatRightFrameFgColor r="0" g="0" b="0" a="255"/>\n<repeatRightFrameBgColor r="255" g="255" b="255" a="0"/>\n<frameFontFace>Edwin</frameFontFace>\n<frameFontSize>10</frameFontSize>\n<frameLineSpacing>1</frameLineSpacing>\n<frameFontSpatiumDependent>0</frameFontSpatiumDependent>\n<frameFontStyle>0</frameFontStyle>\n<frameColor r="0" g="0" b="0" a="255"/>\n<frameAlign>left,top</frameAlign>\n<frameOffset x="0" y="0"/>\n<frameFrameType>0</frameFrameType>\n<frameFramePadding>0.2</frameFramePadding>\n<frameFrameWidth>0.1</frameFrameWidth>\n<frameFrameRound>0</frameFrameRound>\n<frameFrameFgColor r="0" g="0" b="0" a="255"/>\n<frameFrameBgColor r="255" g="255" b="255" a="0"/>\n<textLineFontFace>FreeSerif</textLineFontFace>\n<textLineFontSize>12</textLineFontSize>\n<textLineLineSpacing>1</textLineLineSpacing>\n<textLineFontSpatiumDependent>1</textLineFontSpatiumDependent>\n<textLineFontStyle>0</textLineFontStyle>\n<textLineColor r="0" g="0" b="0" a="255"/>\n<textLineTextAlign>left,center</textLineTextAlign>\n<textLineSystemFlag>0</textLineSystemFlag>\n<systemTextLineFontFace>Edwin</systemTextLineFontFace>\n<systemTextLineFontSize>10</systemTextLineFontSize>\n<systemTextLineFontSpatiumDependent>1</systemTextLineFontSpatiumDependent>\n<systemTextLineFontStyle>0</systemTextLineFontStyle>\n<systemTextLineColor r="0" g="0" b="0" a="255"/>\n<systemTextLineTextAlign>left,center</systemTextLineTextAlign>\n<systemTextLineSystemFlag>1</systemTextLineSystemFlag>\n<noteLinePlacement>0</noteLinePlacement>\n<noteLineFontFace>Edwin</noteLineFontFace>\n<noteLineFontSize>10</noteLineFontSize>\n<noteLineLineSpacing>1</noteLineLineSpacing>\n<noteLineFontSpatiumDependent>1</noteLineFontSpatiumDependent>\n<noteLineFontStyle>0</noteLineFontStyle>\n<noteLineColor r="0" g="0" b="0" a="255"/>\n<noteLineAlign>left,center</noteLineAlign>\n<noteLineOffset x="0" y="0"/>\n<noteLineFrameType>0</noteLineFrameType>\n<noteLineFramePadding>0.2</noteLineFramePadding>\n<noteLineFrameWidth>0.1</noteLineFrameWidth>\n<noteLineFrameRound>0</noteLineFrameRound>\n<noteLineFrameFgColor r="0" g="0" b="0" a="255"/>\n<noteLineFrameBgColor r="255" g="255" b="255" a="0"/>\n<noteLineWidth>0.15</noteLineWidth>\n<noteLineStyle>solid</noteLineStyle>\n<noteLineDashLineLen>5</noteLineDashLineLen>\n<noteLineDashGapLen>5</noteLineDashGapLen>\n<glissandoFontFace>FreeSerif</glissandoFontFace>\n<glissandoFontSize>8</glissandoFontSize>\n<glissandoLineSpacing>1</glissandoLineSpacing>\n<glissandoFontSpatiumDependent>1</glissandoFontSpatiumDependent>\n<glissandoFontStyle>2</glissandoFontStyle>\n<glissandoColor r="0" g="0" b="0" a="255"/>\n<glissandoAlign>left,top</glissandoAlign>\n<glissandoOffset x="0" y="0"/>\n<glissandoFrameType>0</glissandoFrameType>\n<glissandoFramePadding>0.2</glissandoFramePadding>\n<glissandoFrameWidth>0.1</glissandoFrameWidth>\n<glissandoFrameRound>0</glissandoFrameRound>\n<glissandoFrameFgColor r="0" g="0" b="0" a="255"/>\n<glissandoFrameBgColor r="255" g="255" b="255" a="0"/>\n<glissandoLineWidth>0.15</glissandoLineWidth>\n<glissandoText></glissandoText>\n<glissandoStyle>0</glissandoStyle>\n<glissandoStyleHarp>3</glissandoStyleHarp>\n<glissandoType>0</glissandoType>\n<glissandoLineStyle>solid</glissandoLineStyle>\n<glissandoDashLineLen>5</glissandoDashLineLen>\n<glissandoDashGapLen>5</glissandoDashGapLen>\n<glissandoShowText>1</glissandoShowText>\n<bendFontFace>FreeSerif</bendFontFace>\n<bendFontSize>8</bendFontSize>\n<bendLineSpacing>1</bendLineSpacing>\n<bendFontSpatiumDependent>1</bendFontSpatiumDependent>\n<bendFontStyle>0</bendFontStyle>\n<bendColor r="0" g="0" b="0" a="255"/>\n<bendAlign>left,baseline</bendAlign>\n<bendOffset x="0" y="0"/>\n<bendFrameType>0</bendFrameType>\n<bendFramePadding>0.2</bendFramePadding>\n<bendFrameWidth>0.1</bendFrameWidth>\n<bendFrameRound>0</bendFrameRound>\n<bendFrameFgColor r="0" g="0" b="0" a="255"/>\n<bendFrameBgColor r="255" g="255" b="255" a="0"/>\n<bendLineWidth>0.15</bendLineWidth>\n<bendArrowWidth>0.5</bendArrowWidth>\n<guitarBendLineWidth>0.13</guitarBendLineWidth>\n<guitarBendLineWidthTab>0.15</guitarBendLineWidthTab>\n<guitarBendHeightAboveTABStaff>1.5</guitarBendHeightAboveTABStaff>\n<guitarBendPartialBendHeight>1.5</guitarBendPartialBendHeight>\n<guitarBendUseFull>0</guitarBendUseFull>\n<guitarBendArrowWidth>1</guitarBendArrowWidth>\n<guitarBendArrowHeight>1</guitarBendArrowHeight>\n<useCueSizeFretForGraceBends>0</useCueSizeFretForGraceBends>\n<headerFontFace>Edwin</headerFontFace>\n<headerFontSize>8</headerFontSize>\n<headerLineSpacing>1</headerLineSpacing>\n<headerFontSpatiumDependent>0</headerFontSpatiumDependent>\n<headerFontStyle>0</headerFontStyle>\n<headerColor r="0" g="0" b="0" a="255"/>\n<headerAlign>center,top</headerAlign>\n<headerOffset x="0" y="0"/>\n<headerFrameType>0</headerFrameType>\n<headerFramePadding>0.2</headerFramePadding>\n<headerFrameWidth>0.1</headerFrameWidth>\n<headerFrameRound>0</headerFrameRound>\n<headerFrameFgColor r="0" g="0" b="0" a="255"/>\n<headerFrameBgColor r="255" g="255" b="255" a="0"/>\n<footerFontFace>Edwin</footerFontFace>\n<footerFontSize>9</footerFontSize>\n<footerLineSpacing>1</footerLineSpacing>\n<footerFontSpatiumDependent>0</footerFontSpatiumDependent>\n<footerFontStyle>0</footerFontStyle>\n<footerColor r="0" g="0" b="0" a="255"/>\n<footerAlign>center,bottom</footerAlign>\n<footerOffset x="0" y="5"/>\n<footerFrameType>0</footerFrameType>\n<footerFramePadding>0.2</footerFramePadding>\n<footerFrameWidth>0.1</footerFrameWidth>\n<footerFrameRound>0</footerFrameRound>\n<footerFrameFgColor r="0" g="0" b="0" a="255"/>\n<footerFrameBgColor r="255" g="255" b="255" a="0"/>\n<copyrightFontFace>Edwin</copyrightFontFace>\n<copyrightFontSize>9</copyrightFontSize>\n<copyrightLineSpacing>1</copyrightLineSpacing>\n<copyrightFontSpatiumDependent>0</copyrightFontSpatiumDependent>\n<copyrightFontStyle>0</copyrightFontStyle>\n<copyrightColor r="0" g="0" b="0" a="255"/>\n<copyrightAlign>center,bottom</copyrightAlign>\n<copyrightOffset x="0" y="5"/>\n<copyrightFrameType>0</copyrightFrameType>\n<copyrightFramePadding>0.2</copyrightFramePadding>\n<copyrightFrameWidth>0.1</copyrightFrameWidth>\n<copyrightFrameRound>0</copyrightFrameRound>\n<copyrightFrameFgColor r="0" g="0" b="0" a="255"/>\n<copyrightFrameBgColor r="255" g="255" b="255" a="0"/>\n<pageNumberFontFace>Edwin</pageNumberFontFace>\n<pageNumberFontSize>11</pageNumberFontSize>\n<pageNumberLineSpacing>1</pageNumberLineSpacing>\n<pageNumberFontSpatiumDependent>0</pageNumberFontSpatiumDependent>\n<pageNumberFontStyle>1</pageNumberFontStyle>\n<pageNumberColor r="0" g="0" b="0" a="255"/>\n<pageNumberAlign>center,bottom</pageNumberAlign>\n<pageNumberOffset x="0" y="5"/>\n<pageNumberFrameType>0</pageNumberFrameType>\n<pageNumberFramePadding>0.2</pageNumberFramePadding>\n<pageNumberFrameWidth>0.1</pageNumberFrameWidth>\n<pageNumberFrameRound>0</pageNumberFrameRound>\n<pageNumberFrameFgColor r="0" g="0" b="0" a="255"/>\n<pageNumberFrameBgColor r="255" g="255" b="255" a="0"/>\n<instrumentChangeFontFace>Edwin</instrumentChangeFontFace>\n<instrumentChangeFontSize>12</instrumentChangeFontSize>\n<instrumentChangeLineSpacing>1</instrumentChangeLineSpacing>\n<instrumentChangeFontSpatiumDependent>1</instrumentChangeFontSpatiumDependent>\n<instrumentChangeFontStyle>1</instrumentChangeFontStyle>\n<instrumentChangeColor r="0" g="0" b="0" a="255"/>\n<instrumentChangeAlign>left,baseline</instrumentChangeAlign>\n<instrumentChangeOffset x="0" y="0"/>\n<instrumentChangePlacement>0</instrumentChangePlacement>\n<instrumentChangePosAbove x="0" y="-2"/>\n<instrumentChangePosBelow x="0" y="3.5"/>\n<instrumentChangeMinDistance>0.5</instrumentChangeMinDistance>\n<instrumentChangeFrameType>0</instrumentChangeFrameType>\n<instrumentChangeFramePadding>0.2</instrumentChangeFramePadding>\n<instrumentChangeFrameWidth>0.1</instrumentChangeFrameWidth>\n<instrumentChangeFrameRound>0</instrumentChangeFrameRound>\n<instrumentChangeFrameFgColor r="0" g="0" b="0" a="255"/>\n<instrumentChangeFrameBgColor r="255" g="255" b="255" a="0"/>\n<stickingFontFace>Edwin</stickingFontFace>\n<stickingFontSize>12</stickingFontSize>\n<stickingLineSpacing>1</stickingLineSpacing>\n<stickingFontSpatiumDependent>1</stickingFontSpatiumDependent>\n<stickingFontStyle>0</stickingFontStyle>\n<stickingColor r="0" g="0" b="0" a="255"/>\n<stickingAlign>center,baseline</stickingAlign>\n<stickingOffset x="0" y="0"/>\n<stickingPlacement>1</stickingPlacement>\n<stickingPosAbove x="0" y="-2"/>\n<stickingPosBelow x="0" y="2"/>\n<stickingMinDistance>0.5</stickingMinDistance>\n<stickingFrameType>0</stickingFrameType>\n<stickingFramePadding>0.2</stickingFramePadding>\n<stickingFrameWidth>0.1</stickingFrameWidth>\n<stickingFrameRound>0</stickingFrameRound>\n<stickingFrameFgColor r="0" g="0" b="0" a="255"/>\n<stickingFrameBgColor r="255" g="255" b="255" a="0"/>\n<figuredBassFontFace>MScoreBC</figuredBassFontFace>\n<figuredBassFontSize>8</figuredBassFontSize>\n<figuredBassLineSpacing>1</figuredBassLineSpacing>\n<figuredBassFontSpatiumDependent>1</figuredBassFontSpatiumDependent>\n<figuredBassFontStyle>0</figuredBassFontStyle>\n<figuredBassColor r="0" g="0" b="0" a="255"/>\n<user1Name>Work Title</user1Name>\n<user1FontFace>Edwin</user1FontFace>\n<user1FontSize>14</user1FontSize>\n<user1LineSpacing>1</user1LineSpacing>\n<user1FontSpatiumDependent>0</user1FontSpatiumDependent>\n<user1FontStyle>0</user1FontStyle>\n<user1Color r="0" g="0" b="0" a="255"/>\n<user1Align>center,top</user1Align>\n<user1Offset x="0" y="0"/>\n<user1OffsetType>1</user1OffsetType>\n<user1FrameType>0</user1FrameType>\n<user1FramePadding>0.2</user1FramePadding>\n<user1FrameWidth>0.1</user1FrameWidth>\n<user1FrameRound>0</user1FrameRound>\n<user1FrameFgColor r="0" g="0" b="0" a="255"/>\n<user1FrameBgColor r="255" g="255" b="255" a="0"/>\n<user2Name>Movement Title</user2Name>\n<user2FontFace>Edwin</user2FontFace>\n<user2FontSize>24</user2FontSize>\n<user2LineSpacing>1</user2LineSpacing>\n<user2FontSpatiumDependent>0</user2FontSpatiumDependent>\n<user2FontStyle>0</user2FontStyle>\n<user2Color r="0" g="0" b="0" a="255"/>\n<user2Align>center,top</user2Align>\n<user2Offset x="0" y="7"/>\n<user2OffsetType>1</user2OffsetType>\n<user2FrameType>0</user2FrameType>\n<user2FramePadding>0.2</user2FramePadding>\n<user2FrameWidth>0.1</user2FrameWidth>\n<user2FrameRound>0</user2FrameRound>\n<user2FrameFgColor r="0" g="0" b="0" a="255"/>\n<user2FrameBgColor r="255" g="255" b="255" a="0"/>\n<user3Name></user3Name>\n<user3FontFace>FreeSerif</user3FontFace>\n<user3FontSize>10</user3FontSize>\n<user3LineSpacing>1</user3LineSpacing>\n<user3FontSpatiumDependent>1</user3FontSpatiumDependent>\n<user3FontStyle>0</user3FontStyle>\n<user3Color r="0" g="0" b="0" a="255"/>\n<user3Align>left,top</user3Align>\n<user3Offset x="0" y="0"/>\n<user3OffsetType>1</user3OffsetType>\n<user3FrameType>0</user3FrameType>\n<user3FramePadding>0.2</user3FramePadding>\n<user3FrameWidth>0.1</user3FrameWidth>\n<user3FrameRound>0</user3FrameRound>\n<user3FrameFgColor r="0" g="0" b="0" a="255"/>\n<user3FrameBgColor r="255" g="255" b="255" a="0"/>\n<user4Name></user4Name>\n<user4FontFace>FreeSerif</user4FontFace>\n<user4FontSize>10</user4FontSize>\n<user4LineSpacing>1</user4LineSpacing>\n<user4FontSpatiumDependent>1</user4FontSpatiumDependent>\n<user4FontStyle>0</user4FontStyle>\n<user4Color r="0" g="0" b="0" a="255"/>\n<user4Align>left,top</user4Align>\n<user4Offset x="0" y="0"/>\n<user4OffsetType>1</user4OffsetType>\n<user4FrameType>0</user4FrameType>\n<user4FramePadding>0.2</user4FramePadding>\n<user4FrameWidth>0.1</user4FrameWidth>\n<user4FrameRound>0</user4FrameRound>\n<user4FrameFgColor r="0" g="0" b="0" a="255"/>\n<user4FrameBgColor r="255" g="255" b="255" a="0"/>\n<user5Name></user5Name>\n<user5FontFace>FreeSerif</user5FontFace>\n<user5FontSize>10</user5FontSize>\n<user5LineSpacing>1</user5LineSpacing>\n<user5FontSpatiumDependent>1</user5FontSpatiumDependent>\n<user5FontStyle>0</user5FontStyle>\n<user5Color r="0" g="0" b="0" a="255"/>\n<user5Align>left,top</user5Align>\n<user5Offset x="0" y="0"/>\n<user5OffsetType>1</user5OffsetType>\n<user5FrameType>0</user5FrameType>\n<user5FramePadding>0.2</user5FramePadding>\n<user5FrameWidth>0.1</user5FrameWidth>\n<user5FrameRound>0</user5FrameRound>\n<user5FrameFgColor r="0" g="0" b="0" a="255"/>\n<user5FrameBgColor r="255" g="255" b="255" a="0"/>\n<user6Name></user6Name>\n<user6FontFace>FreeSerif</user6FontFace>\n<user6FontSize>10</user6FontSize>\n<user6LineSpacing>1</user6LineSpacing>\n<user6FontSpatiumDependent>1</user6FontSpatiumDependent>\n<user6FontStyle>0</user6FontStyle>\n<user6Color r="0" g="0" b="0" a="255"/>\n<user6Align>left,top</user6Align>\n<user6Offset x="0" y="0"/>\n<user6OffsetType>1</user6OffsetType>\n<user6FrameType>0</user6FrameType>\n<user6FramePadding>0.2</user6FramePadding>\n<user6FrameWidth>0.1</user6FrameWidth>\n<user6FrameRound>0</user6FrameRound>\n<user6FrameFgColor r="0" g="0" b="0" a="255"/>\n<user6FrameBgColor r="255" g="255" b="255" a="0"/>\n<user7Name></user7Name>\n<user7FontFace>FreeSerif</user7FontFace>\n<user7FontSize>10</user7FontSize>\n<user7LineSpacing>1</user7LineSpacing>\n<user7FontSpatiumDependent>1</user7FontSpatiumDependent>\n<user7FontStyle>0</user7FontStyle>\n<user7Color r="0" g="0" b="0" a="255"/>\n<user7Align>left,top</user7Align>\n<user7Offset x="0" y="0"/>\n<user7OffsetType>1</user7OffsetType>\n<user7FrameType>0</user7FrameType>\n<user7FramePadding>0.2</user7FramePadding>\n<user7FrameWidth>0.1</user7FrameWidth>\n<user7FrameRound>0</user7FrameRound>\n<user7FrameFgColor r="0" g="0" b="0" a="255"/>\n<user7FrameBgColor r="255" g="255" b="255" a="0"/>\n<user8Name></user8Name>\n<user8FontFace>FreeSerif</user8FontFace>\n<user8FontSize>10</user8FontSize>\n<user8LineSpacing>1</user8LineSpacing>\n<user8FontSpatiumDependent>1</user8FontSpatiumDependent>\n<user8FontStyle>0</user8FontStyle>\n<user8Color r="0" g="0" b="0" a="255"/>\n<user8Align>left,top</user8Align>\n<user8Offset x="0" y="0"/>\n<user8OffsetType>1</user8OffsetType>\n<user8FrameType>0</user8FrameType>\n<user8FramePadding>0.2</user8FramePadding>\n<user8FrameWidth>0.1</user8FrameWidth>\n<user8FrameRound>0</user8FrameRound>\n<user8FrameFgColor r="0" g="0" b="0" a="255"/>\n<user8FrameBgColor r="255" g="255" b="255" a="0"/>\n<user9Name></user9Name>\n<user9FontFace>FreeSerif</user9FontFace>\n<user9FontSize>10</user9FontSize>\n<user9LineSpacing>1</user9LineSpacing>\n<user9FontSpatiumDependent>1</user9FontSpatiumDependent>\n<user9FontStyle>0</user9FontStyle>\n<user9Color r="0" g="0" b="0" a="255"/>\n<user9Align>left,top</user9Align>\n<user9Offset x="0" y="0"/>\n<user9OffsetType>1</user9OffsetType>\n<user9FrameType>0</user9FrameType>\n<user9FramePadding>0.2</user9FramePadding>\n<user9FrameWidth>0.1</user9FrameWidth>\n<user9FrameRound>0</user9FrameRound>\n<user9FrameFgColor r="0" g="0" b="0" a="255"/>\n<user9FrameBgColor r="255" g="255" b="255" a="0"/>\n<user10Name></user10Name>\n<user10FontFace>FreeSerif</user10FontFace>\n<user10FontSize>10</user10FontSize>\n<user10LineSpacing>1</user10LineSpacing>\n<user10FontSpatiumDependent>1</user10FontSpatiumDependent>\n<user10FontStyle>0</user10FontStyle>\n<user10Color r="0" g="0" b="0" a="255"/>\n<user10Align>left,top</user10Align>\n<user10Offset x="0" y="0"/>\n<user10OffsetType>1</user10OffsetType>\n<user10FrameType>0</user10FrameType>\n<user10FramePadding>0.2</user10FramePadding>\n<user10FrameWidth>0.1</user10FrameWidth>\n<user10FrameRound>0</user10FrameRound>\n<user10FrameFgColor r="0" g="0" b="0" a="255"/>\n<user10FrameBgColor r="255" g="255" b="255" a="0"/>\n<user11Name></user11Name>\n<user11FontFace>FreeSerif</user11FontFace>\n<user11FontSize>10</user11FontSize>\n<user11LineSpacing>1</user11LineSpacing>\n<user11FontSpatiumDependent>1</user11FontSpatiumDependent>\n<user11FontStyle>0</user11FontStyle>\n<user11Color r="0" g="0" b="0" a="255"/>\n<user11Align>left,top</user11Align>\n<user11Offset x="0" y="0"/>\n<user11OffsetType>1</user11OffsetType>\n<user11FrameType>0</user11FrameType>\n<user11FramePadding>0.2</user11FramePadding>\n<user11FrameWidth>0.1</user11FrameWidth>\n<user11FrameRound>0</user11FrameRound>\n<user11FrameFgColor r="0" g="0" b="0" a="255"/>\n<user11FrameBgColor r="255" g="255" b="255" a="0"/>\n<user12Name></user12Name>\n<user12FontFace>FreeSerif</user12FontFace>\n<user12FontSize>10</user12FontSize>\n<user12LineSpacing>1</user12LineSpacing>\n<user12FontSpatiumDependent>1</user12FontSpatiumDependent>\n<user12FontStyle>0</user12FontStyle>\n<user12Color r="0" g="0" b="0" a="255"/>\n<user12Align>left,top</user12Align>\n<user12Offset x="0" y="0"/>\n<user12OffsetType>1</user12OffsetType>\n<user12FrameType>0</user12FrameType>\n<user12FramePadding>0.2</user12FramePadding>\n<user12FrameWidth>0.1</user12FrameWidth>\n<user12FrameRound>0</user12FrameRound>\n<user12FrameFgColor r="0" g="0" b="0" a="255"/>\n<user12FrameBgColor r="255" g="255" b="255" a="0"/>\n<letRingFontFace>FreeSerif</letRingFontFace>\n<letRingFontSize>10</letRingFontSize>\n<letRingLineSpacing>1</letRingLineSpacing>\n<letRingFontSpatiumDependent>1</letRingFontSpatiumDependent>\n<letRingFontStyle>0</letRingFontStyle>\n<letRingColor r="0" g="0" b="0" a="255"/>\n<letRingTextAlign>left,center</letRingTextAlign>\n<letRingHookHeight>0.6</letRingHookHeight>\n<letRingPlacement>1</letRingPlacement>\n<letRingPosAbove x="0" y="0"/>\n<letRingPosBelow x="0" y="0"/>\n<letRingLineWidth>0.15</letRingLineWidth>\n<letRingLineStyle>dashed</letRingLineStyle>\n<letRingDashLineLen>5</letRingDashLineLen>\n<letRingDashGapLen>5</letRingDashGapLen>\n<letRingText>let ring</letRingText>\n<letRingFrameType>0</letRingFrameType>\n<letRingFramePadding>0.2</letRingFramePadding>\n<letRingFrameWidth>0.1</letRingFrameWidth>\n<letRingFrameRound>0</letRingFrameRound>\n<letRingFrameFgColor r="0" g="0" b="0" a="255"/>\n<letRingFrameBgColor r="255" g="255" b="255" a="0"/>\n<letRingEndHookType>3</letRingEndHookType>\n<palmMuteFontFace>FreeSerif</palmMuteFontFace>\n<palmMuteFontSize>10</palmMuteFontSize>\n<palmMuteLineSpacing>1</palmMuteLineSpacing>\n<palmMuteFontSpatiumDependent>1</palmMuteFontSpatiumDependent>\n<palmMuteFontStyle>0</palmMuteFontStyle>\n<palmMuteColor r="0" g="0" b="0" a="255"/>\n<palmMuteTextAlign>left,center</palmMuteTextAlign>\n<palmMuteHookHeight>0.6</palmMuteHookHeight>\n<palmMutePlacement>1</palmMutePlacement>\n<palmMutePosAbove x="0" y="-4"/>\n<palmMutePosBelow x="0" y="4"/>\n<palmMuteLineWidth>0.15</palmMuteLineWidth>\n<palmMuteLineStyle>dashed</palmMuteLineStyle>\n<palmMuteDashLineLen>5</palmMuteDashLineLen>\n<palmMuteDashGapLen>5</palmMuteDashGapLen>\n<palmMuteText>P.M.</palmMuteText>\n<palmMuteFrameType>0</palmMuteFrameType>\n<palmMuteFramePadding>0.2</palmMuteFramePadding>\n<palmMuteFrameWidth>0.1</palmMuteFrameWidth>\n<palmMuteFrameRound>0</palmMuteFrameRound>\n<palmMuteFrameFgColor r="0" g="0" b="0" a="255"/>\n<palmMuteFrameBgColor r="255" g="255" b="255" a="0"/>\n<palmMuteEndHookType>3</palmMuteEndHookType>\n<fermataPosAbove x="0" y="-1"/>\n<fermataPosBelow x="0" y="1"/>\n<fermataMinDistance>0.4</fermataMinDistance>\n<fingeringPlacement>0</fingeringPlacement>\n<articulationMinDistance>0.4</articulationMinDistance>\n<fingeringMinDistance>0.5</fingeringMinDistance>\n<hairpinMinDistance>0.7</hairpinMinDistance>\n<letRingMinDistance>0.7</letRingMinDistance>\n<ottavaMinDistance>0.7</ottavaMinDistance>\n<palmMuteMinDistance>0.7</palmMuteMinDistance>\n<pedalMinDistance>0.7</pedalMinDistance>\n<repeatMinDistance>0.5</repeatMinDistance>\n<textLineMinDistance>0.7</textLineMinDistance>\n<systemTextLineMinDistance>0.7</systemTextLineMinDistance>\n<trillMinDistance>1</trillMinDistance>\n<vibratoMinDistance>1</vibratoMinDistance>\n<voltaMinDistance>1</voltaMinDistance>\n<figuredBassMinDistance>0.5</figuredBassMinDistance>\n<tupletMinDistance>0.5</tupletMinDistance>\n<slurShowTabSimple>1</slurShowTabSimple>\n<slurShowTabCommon>1</slurShowTabCommon>\n<fermataShowTabSimple>1</fermataShowTabSimple>\n<fermataShowTabCommon>1</fermataShowTabCommon>\n<dynamicsShowTabSimple>1</dynamicsShowTabSimple>\n<dynamicsShowTabCommon>1</dynamicsShowTabCommon>\n<hairpinShowTabSimple>1</hairpinShowTabSimple>\n<hairpinShowTabCommon>1</hairpinShowTabCommon>\n<accentShowTabSimple>1</accentShowTabSimple>\n<accentShowTabCommon>1</accentShowTabCommon>\n<staccatoShowTabSimple>1</staccatoShowTabSimple>\n<staccatoShowTabCommon>1</staccatoShowTabCommon>\n<harmonicMarkShowTabSimple>1</harmonicMarkShowTabSimple>\n<harmonicMarkShowTabCommon>1</harmonicMarkShowTabCommon>\n<letRingShowTabSimple>1</letRingShowTabSimple>\n<letRingShowTabCommon>1</letRingShowTabCommon>\n<palmMuteShowTabSimple>1</palmMuteShowTabSimple>\n<palmMuteShowTabCommon>1</palmMuteShowTabCommon>\n<rasgueadoShowTabSimple>1</rasgueadoShowTabSimple>\n<rasgueadoShowTabCommon>1</rasgueadoShowTabCommon>\n<mordentShowTabSimple>1</mordentShowTabSimple>\n<mordentShowTabCommon>1</mordentShowTabCommon>\n<turnShowTabSimple>1</turnShowTabSimple>\n<turnShowTabCommon>1</turnShowTabCommon>\n<wahShowTabSimple>1</wahShowTabSimple>\n<wahShowTabCommon>1</wahShowTabCommon>\n<golpeShowTabSimple>1</golpeShowTabSimple>\n<golpeShowTabCommon>1</golpeShowTabCommon>\n<tabShowTiedFret>0</tabShowTiedFret>\n<tabParenthesizeTiedFret>0</tabParenthesizeTiedFret>\n<parenthesizeTiedFretIfArticulation>1</parenthesizeTiedFretIfArticulation>\n<tabFretPadding>0.1</tabFretPadding>\n<chordlineThickness>0.16</chordlineThickness>\n<dummyMusicalSymbolsScale>1</dummyMusicalSymbolsScale>\n<autoplaceEnabled>1</autoplaceEnabled>\n<defaultsVersion>302</defaultsVersion>\n<changesBeforeBarlineRepeats>0</changesBeforeBarlineRepeats>\n<changesBeforeBarlineOtherJumps>0</changesBeforeBarlineOtherJumps>\n<placeClefsBeforeRepeats>0</placeClefsBeforeRepeats>\n<changesBetweenEndStartRepeat>1</changesBetweenEndStartRepeat>\n<showCourtesiesRepeats>0</showCourtesiesRepeats>\n<useParensRepeatCourtesies>1</useParensRepeatCourtesies>\n<showCourtesiesOtherJumps>0</showCourtesiesOtherJumps>\n<useParensOtherJumpCourtesies>1</useParensOtherJumpCourtesies>\n<showCourtesiesAfterCancellingRepeats>0</showCourtesiesAfterCancellingRepeats>\n<useParensRepeatCourtesiesAfterCancelling>1</useParensRepeatCourtesiesAfterCancelling>\n<showCourtesiesAfterCancellingOtherJumps>0</showCourtesiesAfterCancellingOtherJumps>\n<useParensOtherJumpCourtesiesAfterCancelling>1</useParensOtherJumpCourtesiesAfterCancelling>\n<smallParens>1</smallParens>\n<spatium>1.6764</spatium>\n</Style>\n</museScore>\n]]>\n</file>\n<file name="lied.mscx">\n<![CDATA[<?xml version="1.0" encoding="UTF-8"?>\n<museScore version="4.50">\n<programVersion>4.5.2</programVersion>\n<programRevision>ac9d3bc</programRevision>\n<Score>\n<eid>V4F8uCXyDWP_7K18Ca/k0SI</eid>\n<Division>480</Division>\n<showInvisible>1</showInvisible>\n<showUnprintable>1</showUnprintable>\n<showFrames>1</showFrames>\n<showMargins>0</showMargins>\n<open>1</open>\n<metaTag name="arranger">Transcribed from the IMSLP file(s) at https://imslp.org/wiki/Special:ReverseLookup/${imslp_id}</metaTag>\n<metaTag name="audioComUrl"></metaTag>\n<metaTag name="composer">${composer}</metaTag>\n<metaTag name="copyright">OpenScore (CC0)</metaTag>\n<metaTag name="creationDate"></metaTag>\n<metaTag name="lyricist">${lyricist}</metaTag>\n<metaTag name="movementNumber">${number}</metaTag>\n<metaTag name="movementTitle">${title}</metaTag>\n<metaTag name="platform"></metaTag>\n<metaTag name="source"></metaTag>\n<metaTag name="sourceRevisionId"></metaTag>\n<metaTag name="subtitle"></metaTag>\n<metaTag name="translator"></metaTag>\n<metaTag name="workNumber"></metaTag>\n<metaTag name="workTitle">${set}</metaTag>\n<Part id="1">\n<Staff id="1">\n<StaffType group="pitched">\n<name>stdNormal</name>\n</StaffType>\n</Staff>\n<trackName>Voice</trackName>\n<Instrument id="voice">\n<longName>Voice</longName>\n<trackName>Voice</trackName>\n<minPitchP>38</minPitchP>\n<maxPitchP>84</maxPitchP>\n<minPitchA>41</minPitchA>\n<maxPitchA>79</maxPitchA>\n<instrumentId>voice.vocals</instrumentId>\n<Articulation>\n<velocity>100</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Articulation name="staccatissimo">\n<velocity>100</velocity>\n<gateTime>33</gateTime>\n</Articulation>\n<Articulation name="staccato">\n<velocity>100</velocity>\n<gateTime>50</gateTime>\n</Articulation>\n<Articulation name="portato">\n<velocity>100</velocity>\n<gateTime>67</gateTime>\n</Articulation>\n<Articulation name="tenuto">\n<velocity>100</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Articulation name="marcato">\n<velocity>120</velocity>\n<gateTime>67</gateTime>\n</Articulation>\n<Articulation name="sforzato">\n<velocity>150</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Articulation name="sforzatoStaccato">\n<velocity>150</velocity>\n<gateTime>50</gateTime>\n</Articulation>\n<Articulation name="marcatoStaccato">\n<velocity>120</velocity>\n<gateTime>50</gateTime>\n</Articulation>\n<Articulation name="marcatoTenuto">\n<velocity>120</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Channel>\n<controller ctrl="0" value="0"/>\n<controller ctrl="32" value="17"/>\n<program value="68"/>\n<synti>Fluid</synti>\n</Channel>\n</Instrument>\n</Part>\n<Part id="2">\n<Staff id="2">\n<StaffType group="pitched">\n<name>stdNormal</name>\n</StaffType>\n<bracket type="1" span="2" col="0" visible="1"/>\n<barLineSpan>1</barLineSpan>\n</Staff>\n<Staff id="3">\n<StaffType group="pitched">\n<name>stdNormal</name>\n</StaffType>\n<defaultClef>F</defaultClef>\n</Staff>\n<trackName>Piano</trackName>\n<Instrument id="piano">\n<longName>Piano</longName>\n<trackName>Piano</trackName>\n<minPitchP>21</minPitchP>\n<maxPitchP>108</maxPitchP>\n<minPitchA>21</minPitchA>\n<maxPitchA>108</maxPitchA>\n<instrumentId>keyboard.piano</instrumentId>\n<clef staff="2">F</clef>\n<Articulation>\n<velocity>100</velocity>\n<gateTime>95</gateTime>\n</Articulation>\n<Articulation name="staccatissimo">\n<velocity>100</velocity>\n<gateTime>33</gateTime>\n</Articulation>\n<Articulation name="staccato">\n<velocity>100</velocity>\n<gateTime>50</gateTime>\n</Articulation>\n<Articulation name="portato">\n<velocity>100</velocity>\n<gateTime>67</gateTime>\n</Articulation>\n<Articulation name="tenuto">\n<velocity>100</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Articulation name="marcato">\n<velocity>120</velocity>\n<gateTime>67</gateTime>\n</Articulation>\n<Articulation name="sforzato">\n<velocity>150</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Articulation name="sforzatoStaccato">\n<velocity>150</velocity>\n<gateTime>50</gateTime>\n</Articulation>\n<Articulation name="marcatoStaccato">\n<velocity>120</velocity>\n<gateTime>50</gateTime>\n</Articulation>\n<Articulation name="marcatoTenuto">\n<velocity>120</velocity>\n<gateTime>100</gateTime>\n</Articulation>\n<Channel>\n<program value="0"/>\n<synti>Fluid</synti>\n</Channel>\n</Instrument>\n</Part>\n<Staff id="1"><TBox><topGap>0</topGap><bottomGap>3</bottomGap><sizeIsSpatiumDependent>0</sizeIsSpatiumDependent><eid>D3v2pR9KurD_C0rli9+/TrE</eid><Text><eid>NJF+gY6SRoH_I0iXhP3Pm6P</eid><style>frame</style><italic>1</italic><align>center,top</align><text><i>Dedication here (delete the text frame if non-existent)</i></text></Text></TBox><TBox><topGap>0</topGap><bottomGap>2</bottomGap><sizeIsSpatiumDependent>0</sizeIsSpatiumDependent><eid>xpmfqWuc6gO_bpRdvOw35TC</eid><Text><eid>IQ9cnsWQUsG_8FWKLDA3fML</eid><style>frame</style><size>14</size><align>center,top</align><text><font size="14"/>${set}</text></Text></TBox><TBox><topGap>0</topGap><bottomGap>5</bottomGap><sizeIsSpatiumDependent>0</sizeIsSpatiumDependent><eid>/PcUXcoUk6H_dJq2bH5wPU</eid><Text><eid>Kw/7Y+gZ82M_vDFmGk2ZO1N</eid><style>frame</style><size>20</size><align>center,top</align><text><font size="20"/>${title}</text></Text></TBox><VBox><height>2</height><topGap>0</topGap><bottomGap>16</bottomGap><boxAutoSize>0</boxAutoSize><sizeIsSpatiumDependent>0</sizeIsSpatiumDependent><eid>nYQccWb/8tF_NmlN3JmTW5F</eid><Text><eid>FQCMPAuxUxC_hu/wNeOxVyP</eid><style>poet</style><align>right,baseline</align><offset x="0" y="0.705556"/><text>${composer}</text></Text><Text><eid>1s0IoeVekxP_QuZ9WA3drXD</eid><style>poet</style><align>left,baseline</align><offset x="0" y="0.705556"/><text>${lyricist}</text></Text></VBox>\n`; // header
+	// Voice
+	let t;
+	for (i = 0; i < total_pages; i++) {
+		for (j = 0; j < page[i]; j++) {
+			for (k = 0; k < system[i][j]; k++) {
+				result += `<Measure><eid>${rnd()}</eid>\n`;
+				if (k == system[i][j] - 1) { // A break?
+					if (j == page[i] - 1) { // Page break?
+						result += `<LayoutBreak><eid>${rnd()}</eid><subtype>page</subtype></LayoutBreak>\n`;
+					} else { // Otherwise, line break
+						result += `<LayoutBreak><eid>${rnd()}</eid><subtype>line</subtype></LayoutBreak>\n`;
+					}
+				}
+				if (measure[i][j][k].barline == 'repeat_left') { // Repeat?
+					result += '<startRepeat/>\n';
+				} else if (measure[i][j][k].barline == 'repeat_right') {
+					result += `<endRepeat>2</endRepeat>\n`;
+				}
+				result += '<voice>\n';
+				result += measure[i][j][k].key == undefined ? '' : `<KeySig><eid>${rnd()}</eid><concertKey>${measure[i][j][k].key}</concertKey></KeySig>\n`; // Key signature
+				result += measure[i][j][k].time == undefined ? '' : `<TimeSig><eid>${rnd()}</eid><sigN>${measure[i][j][k].time[0]}</sigN><sigD>${measure[i][j][k].time[1]}</sigD></TimeSig>\n`; // Time signature
+				result += `<Rest><eid>${rnd()}</eid><durationType>measure</durationType><duration>${duration[i][j][k][0]}/${duration[i][j][k][1]}</duration></Rest>\n`;
+				t = measure[i][j][k].barline;
+				if (t == 'double' || t == 'end') {
+					result += `<BarLine><subtype>${t}</subtype><eid>${rnd()}</eid></BarLine>\n`;
+				}
+				result += '</voice></Measure>\n';
+			}
+		}
+	}
+	result += '</Staff>\n';
+	// Piano
+	let stf;
+	for (stf of [2, 3]) {
+		result += `<Staff id="${stf}">`;
+		for (i = 0; i < total_pages; i++) {
+			for (j = 0; j < page[i]; j++) {
+				for (k = 0; k < system[i][j]; k++) {
+					result += `<Measure><voice>\n`;
+					result += measure[i][j][k].key == undefined ? '' : `<KeySig><eid>${rnd()}</eid><concertKey>${measure[i][j][k].key}</concertKey></KeySig>\n`; // Key signature
+					result += measure[i][j][k].time == undefined ? '' : `<TimeSig><eid>${rnd()}</eid><sigN>${measure[i][j][k].time[0]}</sigN><sigD>${measure[i][j][k].time[1]}</sigD></TimeSig>\n`; // Time signature
+					result += `<Rest><eid>${rnd()}</eid><durationType>measure</durationType><duration>${duration[i][j][k][0]}/${duration[i][j][k][1]}</duration></Rest>\n`;
+					t = measure[i][j][k].barline;
+					if (t == 'double' || t == 'end') {
+						result += `<BarLine><subtype>${t}</subtype><eid>${rnd()}</eid></BarLine>\n`;
+					}
+					result += '</voice></Measure>\n';
+				}
+			}
+		}
+		result += '</Staff>\n';
+	}
+	// tail
+	result += `</Score></museScore>\n]]>\n</file>\n<file name="audiosettings.json">\n<![CDATA[{\n"activeSoundProfile": "MuseScore Basic",\n"aux": [\n{\n"out": {\n    "balance": 0,\n    "fxChain": {\n        "0": {\n            "active": true,\n            "chainOrder": 0,\n            "resourceMeta": {\n                "attributes": {\n                },\n                "hasNativeEditorSupport": true,\n                "id": "Muse Reverb",\n                "type": "muse_plugin",\n                "vendor": "Muse"\n            },\n            "unitConfiguration": {\n            }\n        }\n    },\n    "volumeDb": 0\n},\n"soloMuteState": {\n    "mute": false,\n    "solo": false\n}\n},\n{\n"out": {\n    "balance": 0,\n    "fxChain": {\n    },\n    "volumeDb": 0\n},\n"soloMuteState": {\n    "mute": false,\n    "solo": false\n}\n}\n],\n"master": {\n"balance": 0,\n"fxChain": {\n},\n"volumeDb": 0\n},\n"tracks": [\n{\n"in": {\n    "resourceMeta": {\n        "attributes": {\n            "playbackSetupData": "last.last.last",\n            "soundFontName": "MS Basic"\n        },\n        "hasNativeEditorSupport": false,\n        "id": "MS Basic",\n        "type": "fluid_soundfont",\n        "vendor": "Fluid"\n    },\n    "unitConfiguration": {\n    }\n},\n"instrumentId": "voice",\n"out": {\n    "auxSends": [\n        {\n            "active": true,\n            "signalAmount": 0.30000001192092896\n        },\n        {\n            "active": true,\n            "signalAmount": 0.30000001192092896\n        }\n    ],\n    "balance": 0,\n    "fxChain": {\n    },\n    "volumeDb": 0\n},\n"partId": "1",\n"soloMuteState": {\n    "mute": false,\n    "solo": false\n}\n},\n{\n"in": {\n    "resourceMeta": {\n        "attributes": {\n            "playbackSetupData": "last.last.last",\n            "soundFontName": "MS Basic"\n        },\n        "hasNativeEditorSupport": false,\n        "id": "MS Basic",\n        "type": "fluid_soundfont",\n        "vendor": "Fluid"\n    },\n    "unitConfiguration": {\n    }\n},\n"instrumentId": "metronome",\n"out": {\n    "balance": 0,\n    "fxChain": {\n    },\n    "volumeDb": 0\n},\n"partId": "999",\n"soloMuteState": {\n    "mute": false,\n    "solo": false\n}\n},\n{\n"in": {\n    "resourceMeta": {\n        "attributes": {\n            "playbackSetupData": "last.last.last",\n            "soundFontName": "MS Basic"\n        },\n        "hasNativeEditorSupport": false,\n        "id": "MS Basic",\n        "type": "fluid_soundfont",\n        "vendor": "Fluid"\n    },\n    "unitConfiguration": {\n    }\n},\n"instrumentId": "piano",\n"out": {\n    "auxSends": [\n        {\n            "active": true,\n            "signalAmount": 0.30000001192092896\n        },\n        {\n            "active": true,\n            "signalAmount": 0.30000001192092896\n        }\n    ],\n    "balance": 0,\n    "fxChain": {\n    },\n    "volumeDb": 0\n},\n"partId": "2",\n"soloMuteState": {\n    "mute": false,\n    "solo": false\n}\n}\n]\n}\n]]>\n</file>\n<file name="viewsettings.json">\n<![CDATA[{\n"notation": {\n"viewMode": "page"\n}\n}\n]]>\n</file>\n</files>`;
+
+	download_text_file(`${composer} – ${title} – TEMPLATE.mscs`, result);
+}
+
+function start_over() {
+	if (!confirm("Really start over?")) {
+		return;
+	}
+	document.getElementById('div').remove();
+	page_offset = 1;
+	page = undefined;
+	system = undefined;
+	systems_max = undefined;
+	total_pages = 1;
+	total_systems = undefined;
+	measure = undefined;
+	duration = undefined;
+	piece_row = undefined;
+	piece = undefined;
+	result = undefined;
+	total = undefined;
+	let div = document.createElement('div');
+	div.id = 'div';
+	div.innerHTML = "Paste a spreadsheet row below: <button onclick='parse_paste()'>Next</button><br/><input id='paste' size='50'/>";
+	document.body.appendChild(div);
+}
+
+function inconsistency(cause, Cause) {
+	if(confirm(`A ${cause} number you entered doesn't exist. That entry will be marked red.\nClick on 'Cancel' to check it. If correct, click on 'OK' to return to the '${Cause}' step.`)) {
+		if (cause == 'page') {
+			count_pages();
+		} else if (cause == 'system') {
+			count_systems();
+		} else {
+			count_measures();
+		}
+	}
+}
+function rnd() { // For generating eid
+	return Math.floor(Math.random() * 2000000000000);
+}
+</script>
+</html>
